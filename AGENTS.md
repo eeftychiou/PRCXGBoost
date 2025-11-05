@@ -1,10 +1,58 @@
-The current project aims to build a Machine Learning model that will predict the fuel consumption of segments of flights given the trajectory of the flight. The following information is available:
-1. Data dictionary and data profile of the data files available along with columns etc. See  @data_profile_report.txt 
-2.  @run_pipeline.py  which is used to drive the data preparation process, training. This is missing the prediction component which must be added later. The idea is to enhance the project with a number of ML techniques and compare them. For now only GBR is implemented. 
-3.  @data_preparation.py which handles the data preparation. 
-4.  @config.py which contains configuration parameters for the whole project.  
-5.  @acPerfOpenAP.csv contains aircraft flight parameters 
-6.  @train.py  handles the GBR training. The idea is to have different files for different ML techniques. 
-7.  @create_submission.py will create the submission file which will use the flightlist_rank.parquet file to fill in the fuel_rank_submission.parquet for final evaluation by the competition authorities. 
+# Project Overview
 
-Your task is to assist in the completion of the GBR pipeline that will allow to train and test a small sample of the data for testing purposes. Each training session must save all needed information such as the training set and the testing set so that testing can be run following the training easily by selecting the model. 
+This project aims to build a Machine Learning model to predict fuel consumption for flight segments.
+
+## Project Structure
+
+- **`run_pipeline.py`**: The main entry point for running the ML pipeline.
+- **`config.py`**: Contains configuration for the project, including data paths and settings.
+- **`data/`**: Contains the datasets.
+    - **`acPerf/`**: Raw aircraft performance data.
+    - **`prc-2025-datasets/`**: Base datasets for training and ranking.
+    - **`processed/`**: Processed data ready for model training.
+- **`introspection/`**: Directory for introspection files created during data preparation.
+- **`models/`**: Directory to save trained models.
+- **`data_preparation.py`**: Script for data preprocessing.
+- **`train_*.py`**: Scripts for training different models (e.g., `train_gbr.py`, `train_xgb.py`).
+- **`create_submission.py`**: Script to generate the final submission file.
+- **`evaluate_model.py`**: Script for model evaluation.
+- **`tune_model.py`**: Script for hyperparameter tuning.
+- **`data_profiler.py`**: Script for data analysis and profiling.
+
+## Pipeline Stages
+
+The ML pipeline is managed by `run_pipeline.py` and consists of the following stages:
+
+1.  **`profile_data`**: Analyzes the input data to generate a profile report.
+2.  **`prepare_data`**: Preprocesses the raw data, handles missing values, and creates features. The processed data is saved in the `data/processed` directory.
+3.  **`train`**: Trains a machine learning model. The following models are supported:
+    - Gradient Boosting Regressor (`gbr`)
+    - XGBoost Regressor (`xgb`)
+    - Random Forest Regressor (`rf`)
+    The trained model is saved in the `models/` directory.
+4.  **`predict`**: Uses a trained model to make predictions and create a submission file.
+5.  **`evaluate`**: Evaluates the performance of a trained model.
+6.  **`tune`**: Performs hyperparameter tuning for a selected model.
+
+## How to Run
+
+The pipeline can be executed from the command line using `run_pipeline.py`.
+
+**Example:**
+
+To prepare the data:
+```bash
+python run_pipeline.py prepare_data
+```
+
+To train a Gradient Boosting Regressor model:
+```bash
+python run_pipeline.py train --model gbr
+```
+
+## Configuration
+
+The `config.py` file contains important configuration variables:
+
+- **`TEST_RUN`**: Set to `True` to run the pipeline on a small fraction of the data for testing purposes.
+- **`TEST_RUN_FRACTION`**: The fraction of data to use when `TEST_RUN` is `True`.
