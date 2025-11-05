@@ -16,8 +16,8 @@ FLIGHTS_TRAIN_DIR = os.path.join(BASE_DATASETS_DIR, "flights_train")
 FLIGHTS_RANK_DIR = os.path.join(BASE_DATASETS_DIR, "flights_rank")
 
 # --- Data Preparation ---
-TEST_RUN = False
-TEST_RUN_FRACTION = 0.01  # Use a fraction of the data for test runs
+TEST_RUN = True
+TEST_RUN_FRACTION = 0.001  # Use a fraction of the data for test runs
 
 
 # Min-Max Scaler Bounds for PINN inputs

@@ -41,21 +41,19 @@ def classify_flight_phases(traj_df, origin_lat, origin_lon, dest_lat, dest_lon, 
             phases.append('Cruise')
     return phases
 
-def engineer_features(df, df_apt, flights_dir, start_col='start', end_col='end', desc="Engineering Features"):
+def engineer_features(df, flights_dir, start_col='start', end_col='end', desc="Engineering Features"):
     """Applies the full feature engineering pipeline to the dataframe."""
     print(f"Applying full feature engineering pipeline...")
     enhanced_rows = []
 
     for _, row in tqdm(df.iterrows(), total=len(df), desc=desc):
         new_row = row.copy()
-        origin_apt = df_apt[df_apt['icao'] == row['origin_icao']]
-        dest_apt = df_apt[df_apt['icao'] == row['destination_icao']]
         traj_path = os.path.join(flights_dir, f"{row['flight_id']}.parquet")
 
-        if os.path.exists(traj_path) and not origin_apt.empty and not dest_apt.empty:
-            origin_lat, origin_lon = origin_apt.iloc[0]['apt_lat'], origin_apt.iloc[0]['apt_lon']
-            dest_lat, dest_lon = dest_apt.iloc[0]['apt_lat'], dest_apt.iloc[0]['apt_lon']
-            dest_elev = dest_apt.iloc[0]['apt_elev']
+        if os.path.exists(traj_path):
+            origin_lat, origin_lon = row['origin_latitude'], row['origin_longitude']
+            dest_lat, dest_lon = row['destination_latitude'], row['destination_longitude']
+            dest_elev = row['destination_elevation']
 
             traj_df = pd.read_parquet(traj_path)
             traj_df['timestamp'] = pd.to_datetime(traj_df['timestamp'])

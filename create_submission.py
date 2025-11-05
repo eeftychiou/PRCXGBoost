@@ -65,63 +65,49 @@ def main():
 
         apt_path = os.path.join(config.BASE_DATASETS_DIR, 'apt.parquet')
         df_apt = pd.read_parquet(apt_path)
-        df_apt.rename(columns={'latitude': 'apt_lat', 'longitude': 'apt_lon', 'elevation': 'apt_elev'}, inplace=True)
 
         print("Data loaded successfully.")
 
-        # --- 3. Merge Data ---
-        print("Merging dataframes...")
-        # Merge flightlist and ac_perf
-        df_merged = pd.merge(df_flightlist_rank, df_ac_perf, left_on='aircraft_type', right_on='ICAO_TYPE_CODE', how='left')
+        # --- 3. Merge and Preprocess Data ---
+        print("Merging and preprocessing dataframes...")
+        df_merged = pd.merge(df_submission_template, df_flightlist_rank, on='flight_id', how='left')
+        df_merged = pd.merge(df_merged, df_ac_perf, left_on='aircraft_type', right_on='ICAO_TYPE_CODE', how='left')
+        df_merged = pd.merge(df_merged, df_apt.add_prefix('origin_'), left_on='origin_icao', right_on='origin_icao', how='left')
+        df_merged = pd.merge(df_merged, df_apt.add_prefix('destination_'), left_on='destination_icao', right_on='destination_icao', how='left')
 
-        # Merge with submission template, joining on flight_id
-        df_submission = pd.merge(df_submission_template, df_merged, on='flight_id', how='left')
+        # Convert timestamps to numerical features
+        df_merged['start_timestamp'] = df_merged['start'].apply(lambda x: x.value)
+        df_merged['end_timestamp'] = df_merged['end'].apply(lambda x: x.value)
 
-        # Select and rename columns from acPerfOpenAP, mirroring data_preparation.py
-        ac_perf_cols = [
-            'ICAO_TYPE_CODE', 'mtow', 'mlw', 'oew', 'mfc', 'vmo', 'mmo', 'ceiling', 'pax_max',
-            'fuselage_length', 'fuselage_height', 'fuselage_width', 'wing_area', 'wing_span',
-            'wing_mac', 'wing_sweep', 'wing_t/c', 'cruise_height', 'cruise_mach', 'cruise_range',
-            'engine_number', 'drag_cd0', 'drag_k', 'engine_type', 'engine_mount', 'flaps_type'
-        ]
-        df_ac_perf_selected = df_ac_perf[ac_perf_cols]
-
-        # Handle categorical features before filling missing numerical values
+        # Handle categorical features
         categorical_cols = ['engine_type', 'engine_mount', 'flaps_type']
         for col in categorical_cols:
-            # Fill with a placeholder 'Unknown' if mode is not suitable or column is entirely NaN
-            df_submission[col] = df_submission[col].fillna(df_submission[col].mode()[0] if not df_submission[col].mode().empty else 'Unknown')
-        df_submission = pd.get_dummies(df_submission, columns=categorical_cols, prefix=categorical_cols, dtype=float)
+            if col in df_merged.columns:
+                df_merged[col] = df_merged[col].fillna(df_merged[col].mode()[0] if not df_merged[col].mode().empty else 'Unknown')
+        df_merged = pd.get_dummies(df_merged, columns=categorical_cols, prefix=categorical_cols, dtype=float)
 
         # Handle numerical features
-        numerical_cols = df_submission.select_dtypes(include=np.number).columns.tolist()
-        # Remove 'fuel_kg' if it somehow appears (it shouldn't in rank data)
-        if 'fuel_kg' in numerical_cols: numerical_cols.remove('fuel_kg')
-
+        numerical_cols = df_merged.select_dtypes(include=np.number).columns.tolist()
         for col in numerical_cols:
-            df_submission[col] = df_submission[col].fillna(df_submission[col].median() if not df_submission[col].isnull().all() else 0)
+            df_merged[col] = df_merged[col].fillna(df_merged[col].median() if not df_merged[col].isnull().all() else 0)
 
-        print("Dataframes merged successfully.")
+        print("Dataframes merged and preprocessed successfully.")
 
         # --- 4. Engineer Features ---
         flights_rank_dir = os.path.join(config.BASE_DATASETS_DIR, 'flights_rank')
         df_featured = feature_engineering.engineer_features(
-            df_submission,
-            df_apt,
+            df_merged,
             flights_dir=flights_rank_dir,
             start_col='start',
             end_col='end',
             desc="Engineering Features for Submission"
         )
 
-        # Ensure all one-hot encoded engine columns from training are present
-        # and fill any missing numerical features with 0 (or appropriate median/mean)
+        # Align columns with the trained model
         for col in feature_cols:
             if col not in df_featured.columns:
-                # If a feature is missing, add it and fill with 0 (common for one-hot encoded or new features)
                 df_featured[col] = 0.0
-
-        # Reorder columns to match the training features
+        
         X_test = df_featured[feature_cols]
 
         # --- 5. Generate Predictions ---
@@ -134,11 +120,11 @@ def main():
 
         # --- 7. Save Submission File ---
         print("Saving submission file...")
-        submission_path = os.path.join(config.BASE_DATASETS_DIR, 'fuel_rank_submission.parquet')
-        df_submission_template.to_parquet(submission_path, index=False)
+        submission_output_path = os.path.join(config.BASE_DATASETS_DIR, 'fuel_rank_submission.parquet')
+        df_submission_template.to_parquet(submission_output_path, index=False)
 
         print(f"\nSuccessfully generated {len(df_submission_template)} predictions.")
-        print(f"Submission file created/updated at: {submission_path}")
+        print(f"Submission file created/updated at: {submission_output_path}")
         print("\nSubmission Head:")
         print(df_submission_template.head())
 

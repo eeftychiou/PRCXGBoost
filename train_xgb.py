@@ -36,6 +36,10 @@ def train(params_path=None):
     df_featured = pd.read_parquet(featured_data_path)
 
     # --- 2. Prepare Data for Training ---
+    # Convert timestamps to numerical features
+    df_featured['start_timestamp'] = df_featured['start'].apply(lambda x: x.value)
+    df_featured['end_timestamp'] = df_featured['end'].apply(lambda x: x.value)
+
     # Automatically select all numerical features except for the target
     features = df_featured.select_dtypes(include=np.number).columns.tolist()
     features.remove('fuel_kg')
@@ -46,7 +50,11 @@ def train(params_path=None):
     X = df_featured[features]
     y = df_featured[target]
 
-    X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=0.2, random_state=42)
+    if config.TEST_RUN:
+        X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=0.2, random_state=42)
+    else:
+        X_train, X_val, y_train, y_val = X, X, y, y # No split for full run, train on all data
+
     print(f"Training set size: {len(X_train)}, Validation set size: {len(X_val)}")
 
     # --- 3. Train Model ---
@@ -70,16 +78,17 @@ def train(params_path=None):
     xgb_reg.fit(X_train, y_train)
 
     # --- 4. Evaluate Model ---
-    print("Evaluating model on validation set...")
-    y_pred = xgb_reg.predict(X_val)
-    mae = mean_absolute_error(y_val, y_pred)
-    rmse = np.sqrt(mean_squared_error(y_val, y_pred))
-    r2 = r2_score(y_val, y_pred)
+    if config.TEST_RUN:
+        print("Evaluating model on validation set...")
+        y_pred = xgb_reg.predict(X_val)
+        mae = mean_absolute_error(y_val, y_pred)
+        rmse = np.sqrt(mean_squared_error(y_val, y_pred))
+        r2 = r2_score(y_val, y_pred)
 
-    print("\n--- Validation Results ---")
-    print(f"Mean Absolute Error (MAE): {mae:.2f} kg")
-    print(f"Root Mean Squared Error (RMSE): {rmse:.2f} kg")
-    print(f"R-squared (R²): {r2:.4f}")
+        print("\n--- Validation Results ---")
+        print(f"Mean Absolute Error (MAE): {mae:.2f} kg")
+        print(f"Root Mean Squared Error (RMSE): {rmse:.2f} kg")
+        print(f"R-squared (R²): {r2:.4f}")
 
     # --- 5. Feature Importance ---
     print("\n--- Feature Importance ---")
@@ -106,8 +115,9 @@ def train(params_path=None):
     # Save datasets
     X_train.to_parquet(os.path.join(model_dir, "X_train.parquet"))
     y_train.to_frame().to_parquet(os.path.join(model_dir, "y_train.parquet"))
-    X_val.to_parquet(os.path.join(model_dir, "X_val.parquet"))
-    y_val.to_frame().to_parquet(os.path.join(model_dir, "y_val.parquet"))
+    if config.TEST_RUN:
+        X_val.to_parquet(os.path.join(model_dir, "X_val.parquet"))
+        y_val.to_frame().to_parquet(os.path.join(model_dir, "y_val.parquet"))
     print(f"Training and validation datasets saved to {model_dir}")
 
     # Save feature importance plot

@@ -3,7 +3,7 @@ This script handles the data preparation stage of the ML pipeline.
 
 It performs the following steps:
 1.  Loads the raw metadata and airport coordinates.
-2.  Merges the datasets, including detailed aircraft performance data.
+2.  Merges the datasets, including detailed aircraft performance data and all airport data.
 3.  If in test mode, it samples a fraction of the data.
 4.  Applies the full feature engineering pipeline.
 5.  Generates comprehensive introspection files.
@@ -30,7 +30,6 @@ def prepare_data():
         df_flightlist = pd.read_parquet(os.path.join(config.DATA_DIR, 'prc-2025-datasets/flightlist_train.parquet'))
         df_ac_perf = pd.read_csv(os.path.join(config.RAW_DATA_DIR, 'acPerfOpenAP.csv'))
         df_apt = pd.read_parquet(os.path.join(config.DATA_DIR, 'prc-2025-datasets/apt.parquet'))
-        df_apt.rename(columns={'latitude': 'apt_lat', 'longitude': 'apt_lon', 'elevation': 'apt_elev'}, inplace=True)
     except FileNotFoundError as e:
         print(f"Error: Raw data file not found. {e}")
         return
@@ -53,10 +52,16 @@ def prepare_data():
     # Merge with fuel data
     df_merged = pd.merge(df_fuel, df_merged, on='flight_id', how='left')
 
+    # Merge with all airport data for origin and destination
+    df_merged = pd.merge(df_merged, df_apt.add_prefix('origin_'), left_on='origin_icao', right_on='origin_icao', how='left')
+    df_merged = pd.merge(df_merged, df_apt.add_prefix('destination_'), left_on='destination_icao', right_on='destination_icao', how='left')
+
     # Handle categorical features before filling missing numerical values
     categorical_cols = ['engine_type', 'engine_mount', 'flaps_type']
     for col in categorical_cols:
-        df_merged[col] = df_merged[col].fillna(df_merged[col].mode()[0])
+        if col in df_merged.columns and not df_merged[col].mode().empty:
+            df_merged[col] = df_merged[col].fillna(df_merged[col].mode()[0])
+            
     df_merged = pd.get_dummies(df_merged, columns=categorical_cols, prefix=categorical_cols, dtype=float)
 
     # Handle numerical features
@@ -81,7 +86,6 @@ def prepare_data():
     flights_train_dir = os.path.join(config.DATA_DIR, 'prc-2025-datasets/flights_train')
     df_featured = feature_engineering.engineer_features(
         df_to_process,
-        df_apt,
         flights_dir=flights_train_dir,
         start_col='start',
         end_col='end',
