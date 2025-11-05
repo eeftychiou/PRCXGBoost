@@ -134,7 +134,6 @@ def main():
 
         # --- 7. Save Submission File ---
         print("Saving submission file...")
-        df_submission_template.rename(columns={'fuel_kg': 'fuel_consumption'}, inplace=True)
         submission_path = os.path.join(config.BASE_DATASETS_DIR, 'fuel_rank_submission.parquet')
         df_submission_template.to_parquet(submission_path, index=False)
 
