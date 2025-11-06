@@ -2,6 +2,7 @@
 Configuration for the ML pipeline.
 """
 import os
+import logging
 
 # --- Core Paths ---
 DATA_DIR = "data"
@@ -20,7 +21,7 @@ INTERPOLATED_TRAJECTORIES_DIR = os.path.join(DATA_DIR, "interpolated_trajectorie
 
 # --- Data Preparation ---
 TEST_RUN = True
-TEST_RUN_FRACTION = 0.001  # Use a fraction of the data for test runs
+TEST_RUN_FRACTION = 0.005  # Use a fraction of the data for test runs
 
 
 # Min-Max Scaler Bounds for PINN inputs
@@ -29,3 +30,7 @@ SCALER_BOUNDS = {
     'true_airspeed': {'min': 0, 'max': 600},
     'segment_start_mass': {'min': 20000, 'max': 90000}
 }
+
+# --- Logging Configuration ---
+LOG_FILE = os.path.join(INTROSPECTION_DIR, "error.log")
+LOG_LEVEL = logging.ERROR

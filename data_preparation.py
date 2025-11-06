@@ -107,11 +107,13 @@ def prepare_data():
         'engine_options_A320-252N',
         'engine_options_A320-273N', 'engine_options_A330-341', 'engine_options_A330-342', 'engine_options_A318-112',
         'engine_options_A318-121','engine_options_A318-111','engine_options_A318-122','engine_options_A380-861',
-        'engine_options_A380-842', 'engine_options_A380-841','fuel_aircraft','fuel_engine','Unknown_NoTrajectory_fraction'
+        'engine_options_A380-842', 'engine_options_A380-841','fuel_aircraft','fuel_engine','unknown_notrajectory_fraction',
+        'flaps_lambda_f','cruise_height','engine_number','clean_cd0','clean_k','clean_gears'
+
     ]
 
     # Filter out columns that don't exist in the DataFrame to avoid errors
-    cols_to_drop_existing = [col for col in cols_to_drop if col in df_merged.columns]
+    cols_to_drop_existing = [col for col in cols_to_drop if col in df_featured.columns]
     if cols_to_drop_existing:
         df_featured.drop(columns=cols_to_drop_existing, inplace=True)
 
