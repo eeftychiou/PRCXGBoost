@@ -94,10 +94,16 @@ def main():
         print("Dataframes merged and preprocessed successfully.")
 
         # --- 4. Engineer Features ---
-        flights_rank_dir = os.path.join(config.BASE_DATASETS_DIR, 'flights_rank')
+        # IMPORTANT: Now reading from the interpolated trajectories directory
+        interpolated_flights_rank_dir = os.path.join(config.DATA_DIR, 'interpolated_trajectories/flights_rank')
+        if not os.path.exists(interpolated_flights_rank_dir):
+            print(f"Error: Interpolated trajectory directory not found: {interpolated_flights_rank_dir}")
+            print("Please run the 'interpolate_trajectories' stage first.")
+            return
+
         df_featured = feature_engineering.engineer_features(
             df_merged,
-            flights_dir=flights_rank_dir,
+            flights_dir=interpolated_flights_rank_dir, # Use the interpolated directory
             start_col='start',
             end_col='end',
             desc="Engineering Features for Submission"

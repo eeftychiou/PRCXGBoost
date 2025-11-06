@@ -21,7 +21,11 @@ import feature_engineering
 import introspection
 
 def prepare_data():
-    """Loads, preprocesses, and saves the data for the pipeline."""
+    """
+    Loads, preprocesses, and saves the data for the pipeline.
+    This function now expects trajectory files to be pre-interpolated
+    and located in the 'data/interpolated_trajectories' directory.
+    """
     print("--- Starting Data Preparation Stage ---")
 
     # --- 1. Load Data ---
@@ -37,7 +41,6 @@ def prepare_data():
 
     # --- 2. Preprocess and Merge Data ---
     print("Preprocessing and merging all datasets...")
-    
 
 
     # Merge flight list with aircraft performance data
@@ -50,23 +53,45 @@ def prepare_data():
     df_merged = pd.merge(df_merged, df_apt.add_prefix('origin_'), left_on='origin_icao', right_on='origin_icao', how='left')
     df_merged = pd.merge(df_merged, df_apt.add_prefix('destination_'), left_on='destination_icao', right_on='destination_icao', how='left')
 
-    # Handle categorical features before filling missing numerical values
-    categorical_cols = ['engine_type', 'engine_mount', 'flaps_type']
-    for col in categorical_cols:
-        if col in df_merged.columns and not df_merged[col].mode().empty:
-            df_merged[col] = df_merged[col].fillna(df_merged[col].mode()[0])
-            
-    df_merged = pd.get_dummies(df_merged, columns=categorical_cols, prefix=categorical_cols, dtype=float)
-
-    # Handle numerical features
-    numerical_cols = df_merged.select_dtypes(include=np.number).columns.tolist()
-    for col in numerical_cols:
-        df_merged[col] = df_merged[col].fillna(df_merged[col].median())
-
     df_merged['start'] = pd.to_datetime(df_merged['start'])
     df_merged['end'] = pd.to_datetime(df_merged['end'])
     df_merged.dropna(subset=['fuel_kg', 'aircraft_type'], inplace=True)
     df_merged.reset_index(drop=True, inplace=True)
+
+
+    # Drop columns with very high (or 100%) missing values and low correlation
+    # This list is derived from data_preparation_missing_values.csv and target correlation
+    cols_to_drop = [
+        'engine_options_A319-113', 'engine_options_A319-114', 'engine_options_A319-111', 'engine_options_A319-112',
+        'engine_options_A319-132',
+        'engine_options_A319-133', 'engine_options_A319-131', 'engine_options_A319-115', 'engine_options_A330-323',
+        'engine_options_A330-322',
+        'engine_options_A330-343', 'engine_options_A330-302', 'engine_options_A330-303', 'engine_options_A330-321',
+        'engine_options_A330-301',
+        'engine_options_A321-251N', 'engine_options_A321-272N', 'engine_options_A321-271N', 'engine_options_A321-252N',
+        'engine_options_A321-253N',
+        'engine_options_A321-232', 'engine_options_A321-231', 'engine_options_A321-211', 'engine_options_A321-131',
+        'engine_options_A321-111',
+        'engine_options_A321-212', 'engine_options_A321-213', 'engine_options_A321-112', 'engine_options_A330-243',
+        'engine_options_A330-201',
+        'engine_options_A330-223', 'engine_options_A330-203', 'engine_options_A330-223F', 'engine_options_A330-202',
+        'engine_options',
+        'engine_options_A350-941', 'engine_options_A320-214', 'engine_options_A320-211', 'engine_options_A320-111',
+        'engine_options_A320-212',
+        'engine_options_A320-215', 'engine_options_A320-231', 'engine_options_A320-216', 'engine_options_A320-232',
+        'engine_options_A320-233',
+        'engine_options_A320-271N', 'engine_options_A320-253N', 'engine_options_A320-272N', 'engine_options_A320-251N',
+        'engine_options_A320-252N',
+        'engine_options_A320-273N', 'engine_options_A330-341', 'engine_options_A330-342', 'engine_options_A318-112',
+        'engine_options_A318-121','engine_options_A318-111','engine_options_A318-122','engine_options_A380-861',
+        'engine_options_A380-842', 'engine_options_A380-841','fuel_aircraft','fuel_engine','unknown_notrajectory_fraction'
+    ]
+
+    # Filter out columns that don't exist in the DataFrame to avoid errors
+    cols_to_drop_existing = [col for col in cols_to_drop if col in df_merged.columns]
+    if cols_to_drop_existing:
+        df_merged.drop(columns=cols_to_drop_existing, inplace=True)
+
 
     # --- 3. Handle Test Run ---
     if config.TEST_RUN:
@@ -77,14 +102,25 @@ def prepare_data():
         df_to_process = df_merged
 
     # --- 4. Engineer Features ---
-    flights_train_dir = os.path.join(config.DATA_DIR, 'prc-2025-datasets/flights_train')
+    # IMPORTANT: Now reading from the interpolated trajectories directory
+    interpolated_flights_train_dir = os.path.join(config.DATA_DIR, 'interpolated_trajectories/flights_train')
+    if not os.path.exists(interpolated_flights_train_dir):
+        print(f"Error: Interpolated trajectory directory not found: {interpolated_flights_train_dir}")
+        print("Please run the 'interpolate_trajectories' stage first.")
+        return
+
     df_featured = feature_engineering.engineer_features(
         df_to_process,
-        flights_dir=flights_train_dir,
+        flights_dir=interpolated_flights_train_dir, # Use the interpolated directory
         start_col='start',
         end_col='end',
         desc="Engineering Features"
     )
+
+
+
+
+
 
     # --- 5. Generate Introspection Files ---
     run_id = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")

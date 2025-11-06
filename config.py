@@ -15,9 +15,12 @@ BASE_DATASETS_DIR = os.path.join(DATA_DIR, "prc-2025-datasets")
 FLIGHTS_TRAIN_DIR = os.path.join(BASE_DATASETS_DIR, "flights_train")
 FLIGHTS_RANK_DIR = os.path.join(BASE_DATASETS_DIR, "flights_rank")
 
+# --- Interpolated Trajectory Paths ---
+INTERPOLATED_TRAJECTORIES_DIR = os.path.join(DATA_DIR, "interpolated_trajectories")
+
 # --- Data Preparation ---
 TEST_RUN = True
-TEST_RUN_FRACTION = 0.005  # Use a fraction of the data for test runs
+TEST_RUN_FRACTION = 0.01  # Use a fraction of the data for test runs
 
 
 # Min-Max Scaler Bounds for PINN inputs

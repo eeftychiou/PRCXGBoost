@@ -9,10 +9,13 @@ This project aims to build a Machine Learning model to predict fuel consumption 
 - **`data/`**: Contains the datasets.
     - **`acPerf/`**: Raw aircraft performance data.
     - **`prc-2025-datasets/`**: Base datasets for training and ranking.
+    - **`interpolated_trajectories/`**: New directory for interpolated trajectory data.
     - **`processed/`**: Processed data ready for model training.
 - **`introspection/`**: Directory for introspection files created during data preparation.
 - **`models/`**: Directory to save trained models.
 - **`data_preparation.py`**: Script for data preprocessing.
+- **`trajectory_interpolation.py`**: New module for interpolating missing values in trajectory files.
+- **`feature_engineering.py`**: Script for creating new features from raw and trajectory data.
 - **`train_*.py`**: Scripts for training different models (e.g., `train_gbr.py`, `train_xgb.py`).
 - **`create_submission.py`**: Script to generate the final submission file.
 - **`evaluate_model.py`**: Script for model evaluation.
@@ -24,15 +27,16 @@ This project aims to build a Machine Learning model to predict fuel consumption 
 The ML pipeline is managed by `run_pipeline.py` and consists of the following stages:
 
 1.  **`profile_data`**: Analyzes the input data to generate a profile report.
-2.  **`prepare_data`**: Preprocesses the raw data, handles missing values, and creates features. The processed data is saved in the `data/processed` directory.
-3.  **`train`**: Trains a machine learning model. The following models are supported:
+2.  **`interpolate_trajectories`**: Processes raw trajectory files, interpolates missing values (e.g., CAS, TAS, altitude, groundspeed, etc.) per flight, and saves the processed files to `data/interpolated_trajectories`.
+3.  **`prepare_data`**: Preprocesses the raw data, handles missing values (from non-trajectory data), and creates features. This stage now uses the *interpolated* trajectory data. The processed data is saved in the `data/processed` directory.
+4.  **`train`**: Trains a machine learning model. The following models are supported:
     - Gradient Boosting Regressor (`gbr`)
     - XGBoost Regressor (`xgb`)
     - Random Forest Regressor (`rf`)
     The trained model is saved in the `models/` directory.
-4.  **`predict`**: Uses a trained model to make predictions and create a submission file.
-5.  **`evaluate`**: Evaluates the performance of a trained model.
-6.  **`tune`**: Performs hyperparameter tuning for a selected model.
+5.  **`predict`**: Uses a trained model to make predictions and create a submission file. This stage also uses the *interpolated* trajectory data for feature engineering.
+6.  **`evaluate`**: Evaluates the performance of a trained model.
+7.  **`tune`**: Performs hyperparameter tuning for a selected model.
 
 ## How to Run
 
@@ -40,14 +44,19 @@ The pipeline can be executed from the command line using `run_pipeline.py`.
 
 **Example:**
 
-To prepare the data:
+To interpolate missing values in trajectory files:
+```bash
+python run_pipeline.py interpolate_trajectories
+```
+
+To prepare the data (after interpolation):
 ```bash
 python run_pipeline.py prepare_data
 ```
 
-To train a Gradient Boosting Regressor model:
+To train an XGBoost Regressor model:
 ```bash
-python run_pipeline.py train --model gbr
+python run_pipeline.py train --model xgb
 ```
 
 ## Configuration
