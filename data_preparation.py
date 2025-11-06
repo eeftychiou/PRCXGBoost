@@ -18,6 +18,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import config
 import feature_engineering
+import introspection
 
 def prepare_data():
     """Loads, preprocesses, and saves the data for the pipeline."""
@@ -37,17 +38,10 @@ def prepare_data():
     # --- 2. Preprocess and Merge Data ---
     print("Preprocessing and merging all datasets...")
     
-    # Select and rename columns from acPerfOpenAP
-    ac_perf_cols = [
-        'ICAO_TYPE_CODE', 'mtow', 'mlw', 'oew', 'mfc', 'vmo', 'mmo', 'ceiling', 'pax_max', 
-        'fuselage_length', 'fuselage_height', 'fuselage_width', 'wing_area', 'wing_span', 
-        'wing_mac', 'wing_sweep', 'wing_t/c', 'cruise_height', 'cruise_mach', 'cruise_range', 
-        'engine_number', 'drag_cd0', 'drag_k', 'engine_type', 'engine_mount', 'flaps_type'
-    ]
-    df_ac_perf_selected = df_ac_perf[ac_perf_cols]
+
 
     # Merge flight list with aircraft performance data
-    df_merged = pd.merge(df_flightlist, df_ac_perf_selected, left_on='aircraft_type', right_on='ICAO_TYPE_CODE', how='left')
+    df_merged = pd.merge(df_flightlist, df_ac_perf, left_on='aircraft_type', right_on='ICAO_TYPE_CODE', how='left')
     
     # Merge with fuel data
     df_merged = pd.merge(df_fuel, df_merged, on='flight_id', how='left')
@@ -94,11 +88,12 @@ def prepare_data():
 
     # --- 5. Generate Introspection Files ---
     run_id = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
-    introspection_run_dir = os.path.join(config.INTROSPECTION_DIR, run_id)
-    os.makedirs(introspection_run_dir, exist_ok=True)
-    print(f"Generating introspection files in {introspection_run_dir}")
-
-    df_featured.to_csv(os.path.join(introspection_run_dir, "enhanced_data.csv"), index=False)
+    introspection.generate_introspection_files(
+        df_featured, 
+        "data_preparation", 
+        run_id, 
+        target_variable='fuel_kg'
+    )
 
     # --- 6. Save Processed Data ---
     output_filename = f"featured_data{'test' if config.TEST_RUN else ''}.parquet"
