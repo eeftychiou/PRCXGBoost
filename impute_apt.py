@@ -11,7 +11,6 @@ import re
 import os
 import logging
 import time
-import argparse
 
 # --- Setup Logging ---
 log_file = 'impute_apt.log'
@@ -81,6 +80,7 @@ def scrape_airport_data():
         logging.info(f"Fetching data for {icao_code} from {url}")
 
         row_update = {'icao': icao_code}
+        html_path = os.path.join(HTML_DIR, f"{icao_code}.html")
 
         try:
             time.sleep(1) # Add a 1-second delay
@@ -88,7 +88,6 @@ def scrape_airport_data():
             response.raise_for_status()
             
             # Save HTML content for debugging
-            html_path = os.path.join(HTML_DIR, f"{icao_code}.html")
             with open(html_path, 'w', encoding='utf-8') as f:
                 f.write(response.text)
             logging.info(f"Saved HTML for {icao_code} to {html_path}")
@@ -115,12 +114,17 @@ def scrape_airport_data():
                 row_update['elevation'] = pd.NA
 
             # --- Extract Runway Information ---
+            runways_data = []
             runway_headers = soup.find_all('h4', string=re.compile(r'Runway\s'))
-            runway_count = 0
             if runway_headers:
                 for i, header in enumerate(runway_headers, 1):
-                    runway_count += 1
+                    if len(runways_data) >= 8:
+                        logging.warning(f"Found more than 8 runways for {icao_code}, only processing the first 8.")
+                        break
+                    
+                    runway_details = {}
                     logging.info(f"  - Processing Runway {i}")
+                    
                     # a) Runway Length
                     try:
                         dimensions_p = header.find_next_sibling('p')
@@ -130,20 +134,18 @@ def scrape_airport_data():
 
                         if length_match_m:
                             length = int(length_match_m.group(1))
-                            row_update[f'RWY_{i}_LENGTH'] = length
+                            runway_details['LENGTH'] = length
                             logging.info(f"    - Length: {length}m (from meters)")
                         elif length_match_ft:
                             length_ft = int(length_match_ft.group(1))
                             length_m = round(length_ft * 0.3048)
-                            row_update[f'RWY_{i}_LENGTH'] = length_m
+                            runway_details['LENGTH'] = length_m
                             logging.info(f"    - Length: {length_m}m (converted from {length_ft} ft)")
                         else:
-                            row_update[f'RWY_{i}_LENGTH'] = pd.NA
-                            logging.warning(f"    - Could not parse length for runway {i}")
+                            logging.warning(f"    - Could not parse length for runway {i}. HTML file: {html_path}")
 
                     except (AttributeError, IndexError, ValueError) as e:
-                        row_update[f'RWY_{i}_LENGTH'] = pd.NA
-                        logging.warning(f"    - Could not parse length for runway {i}: {e}")
+                        logging.warning(f"    - Could not parse length for runway {i}: {e}. HTML file: {html_path}")
 
                     # Find the table with runway details
                     details_table = header.find_next_sibling('table')
@@ -155,96 +157,45 @@ def scrape_airport_data():
                         try:
                             heading_a = int(re.search(r'(\d+)', headings[0].text).group(1))
                             heading_b = int(re.search(r'(\d+)', headings[1].text).group(1))
-                            row_update[f'RWY_{i}_HEADING_a'] = heading_a
-                            row_update[f'RWY_{i}_HEADING_b'] = heading_b
+                            runway_details['HEADING_a'] = heading_a
+                            runway_details['HEADING_b'] = heading_b
                             logging.info(f"    - Headings: {heading_a}°, {heading_b}°")
                         except (AttributeError, IndexError, ValueError) as e:
-                            row_update[f'RWY_{i}_HEADING_a'] = pd.NA
-                            row_update[f'RWY_{i}_HEADING_b'] = pd.NA
-                            logging.warning(f"    - Could not parse headings for runway {i}: {e}")
+                            logging.warning(f"    - Could not parse headings for runway {i}: {e}. HTML file: {html_path}")
 
                         # c) Runway Elevation
                         try:
                             elevation_a = float(elevations[0].text)
                             elevation_b = float(elevations[1].text)
-                            row_update[f'RWY_{i}_ELEVATION_a'] = elevation_a
-                            row_update[f'RWY_{i}_ELEVATION_b'] = elevation_b
+                            runway_details['ELEVATION_a'] = elevation_a
+                            runway_details['ELEVATION_b'] = elevation_b
                             logging.info(f"    - Elevations: {elevation_a} ft, {elevation_b} ft")
                         except (AttributeError, IndexError, ValueError) as e:
-                            airport_elevation = row_update.get('elevation', pd.NA)
-                            row_update[f'RWY_{i}_ELEVATION_a'] = airport_elevation
-                            row_update[f'RWY_{i}_ELEVATION_b'] = airport_elevation
-                            if pd.notna(airport_elevation):
-                                logging.warning(f"    - Could not parse elevations for runway {i}: {e}. Using airport elevation ({airport_elevation} ft) as fallback.")
-                            else:
-                                logging.warning(f"    - Could not parse elevations for runway {i}: {e}, and airport elevation is also not available.")
+                            logging.warning(f"    - Could not parse elevations for runway {i}: {e}. HTML file: {html_path}")
                     else:
-                        logging.warning(f"Runway details table not found for {icao_code}, runway {i}")
-            else:
-                # Fallback parsing for different HTML structure
-                runway_divs = soup.find_all('div', class_='aptdata')
-                for div in runway_divs:
-                    title_div = div.find('div', class_='aptdatatitle')
-                    if title_div and 'Runway' in title_div.text:
-                        runway_count += 1
-                        logging.info(f"  - Processing Runway (fallback) {runway_count}")
-                        table = div.find('table')
-                        if table:
-                            for tr in table.find_all('tr'):
-                                th = tr.find('th')
-                                tds = tr.find_all('td')
-                                if th and tds:
-                                    if 'Dimensions' in th.text:
-                                        try:
-                                            dimensions_text = tds[0].text
-                                            length_match_m = re.search(r'/ (\d+) x \d+ meters', dimensions_text)
-                                            length_match_ft = re.search(r'(\d+) x \d+ feet', dimensions_text)
+                        logging.warning(f"Runway details table not found for {icao_code}, runway {i}. HTML file: {html_path}")
+                    
+                    runways_data.append(runway_details)
 
-                                            if length_match_m:
-                                                length = int(length_match_m.group(1))
-                                                row_update[f'RWY_{runway_count}_LENGTH'] = length
-                                                logging.info(f"    - Length: {length}m (from meters, fallback)")
-                                            elif length_match_ft:
-                                                length_ft = int(length_match_ft.group(1))
-                                                length_m = round(length_ft * 0.3048)
-                                                row_update[f'RWY_{runway_count}_LENGTH'] = length_m
-                                                logging.info(f"    - Length: {length_m}m (converted from {length_ft} ft, fallback)")
-                                            else:
-                                                logging.warning(f"    - Could not parse length for runway {runway_count} (fallback)")
-                                        except (AttributeError, IndexError, ValueError) as e:
-                                            logging.warning(f"    - Could not parse length for runway {runway_count} (fallback): {e}")
-                                    elif 'Runway Heading' in th.text:
-                                        try:
-                                            headings = [int(re.search(r'(\d+)', h).group(1)) for h in tds[0].text.split('/')]
-                                            row_update[f'RWY_{runway_count}_HEADING_a'] = headings[0]
-                                            row_update[f'RWY_{runway_count}_HEADING_b'] = headings[1]
-                                            logging.info(f"    - Headings: {headings[0]}°, {headings[1]}°")
-                                        except (AttributeError, IndexError, ValueError):
-                                            try:
-                                                heading_a = int(re.search(r'(\d+)', tds[0].text).group(1))
-                                                heading_b = int(re.search(r'(\d+)', tds[1].text).group(1))
-                                                row_update[f'RWY_{runway_count}_HEADING_a'] = heading_a
-                                                row_update[f'RWY_{runway_count}_HEADING_b'] = heading_b
-                                                logging.info(f"    - Headings: {heading_a}°, {heading_b}°")
-                                            except (AttributeError, IndexError, ValueError) as e:
-                                                logging.warning(f"    - Could not parse headings for runway {runway_count} (fallback): {e}")
-                                    elif 'Elevation' in th.text:
-                                        try:
-                                            elevation_a = float(tds[0].text)
-                                            elevation_b = float(tds[1].text)
-                                            row_update[f'RWY_{runway_count}_ELEVATION_a'] = elevation_a
-                                            row_update[f'RWY_{runway_count}_ELEVATION_b'] = elevation_b
-                                            logging.info(f"    - Elevations: {elevation_a} ft, {elevation_b} ft")
-                                        except (AttributeError, IndexError, ValueError) as e:
-                                            airport_elevation = row_update.get('elevation', pd.NA)
-                                            row_update[f'RWY_{runway_count}_ELEVATION_a'] = airport_elevation
-                                            row_update[f'RWY_{runway_count}_ELEVATION_b'] = airport_elevation
-                                            if pd.notna(airport_elevation):
-                                                logging.warning(f"    - Could not parse elevations for runway {runway_count} (fallback): {e}. Using airport elevation ({airport_elevation} ft) as fallback.")
-                                            else:
-                                                logging.warning(f"    - Could not parse elevations for runway {runway_count} (fallback): {e}, and airport elevation is also not available.")
-            if runway_count == 0:
-                logging.warning(f"No runway sections found for {icao_code}")
+            if not runways_data:
+                logging.warning(f"No runway data found for {icao_code}. HTML file: {html_path}")
+            else:
+                first_runway_data = runways_data[0]
+                for i in range(1, 9):  # For RWY_1 to RWY_8
+                    rwy_data_to_use = None
+                    if i <= len(runways_data):
+                        rwy_data_to_use = runways_data[i-1]
+                    else:  # if more runways needed, use the first one
+                        rwy_data_to_use = first_runway_data
+                        logging.info(f"  - Filling runway {i} with data from runway 1 for {icao_code}")
+
+                    for detail in ['LENGTH', 'HEADING_a', 'HEADING_b', 'ELEVATION_a', 'ELEVATION_b']:
+                        col_name = f'RWY_{i}_{detail}'
+                        value = rwy_data_to_use.get(detail, pd.NA)
+                        row_update[col_name] = value
+                        if pd.isna(value):
+                            logging.warning(f"Missing detail '{detail}' for runway {i} for {icao_code}. HTML file: {html_path}")
+
 
         except requests.exceptions.RequestException as e:
             logging.error(f"Could not fetch data for {icao_code}: {e}")
@@ -269,9 +220,7 @@ def scrape_airport_data():
                 apt_df[col] = pd.NA
 
         # Update apt_df with the new data.
-        # This will modify existing columns and fill in the newly added columns.
         apt_df.update(update_df)
-
         apt_df.reset_index(inplace=True)
 
     # Save the updated DataFrame to the Parquet file
@@ -283,82 +232,5 @@ def scrape_airport_data():
 
     logging.info("Enrichment run completed.")
 
-def fill_missing_runway_data():
-    logging.info("Starting interactive data imputation.")
-    apt_df = pd.read_parquet(apt_file_path)
-
-    # --- Part 1: Fill runway elevation from airport elevation ---
-    logging.info("Filling missing runway elevations from airport elevation.")
-    for index, row in apt_df.iterrows():
-        airport_elevation = row['elevation']
-        if pd.notna(airport_elevation):
-            for rwy_num in range(1, 9):  # For RWY_1 to RWY_8
-                for suffix in ['a', 'b']:
-                    col_name = f'RWY_{rwy_num}_ELEVATION_{suffix}'
-                    if col_name in apt_df.columns:
-                        if pd.isna(apt_df.loc[index, col_name]):
-                            apt_df.loc[index, col_name] = airport_elevation
-                            logging.info(f"Imputed {col_name} for {row['icao']} with airport elevation ({airport_elevation} ft).")
-                    else:
-                        # If the column doesn't exist, create it and fill
-                        apt_df[col_name] = pd.NA # Initialize with NA
-                        apt_df.loc[index, col_name] = airport_elevation
-                        logging.info(f"Created and filled {col_name} for {row['icao']} with airport elevation ({airport_elevation} ft).")
-
-    # --- Part 2: Interactive input for all remaining nulls ---
-    logging.info("Checking for any remaining missing values for manual input.")
-    
-    # Get a boolean DataFrame of where the nulls are
-    null_mask = apt_df.isnull()
-    
-    # Iterate over rows that have at least one null value
-    for index, row in apt_df[null_mask.any(axis=1)].iterrows():
-        print(f"\n--- Airport: {row['icao']} ---")
-        print("Current data (missing values marked as NaN):")
-        print(row.to_string())
-        print("\n--- Please provide missing values ---")
-
-        # Create a copy of the row to update
-        updated_row = row.copy()
-
-        # Iterate only over the columns that are null in this specific row
-        for col_name in row[row.isnull()].index:
-            user_input = input(f"Enter value for '{col_name}' (or press Enter to skip): ")
-            
-            if user_input.strip():
-                # Try to convert input to the original column's dtype
-                original_dtype = apt_df[col_name].dtype
-                try:
-                    if pd.api.types.is_integer_dtype(original_dtype):
-                        updated_row[col_name] = int(user_input)
-                    elif pd.api.types.is_float_dtype(original_dtype):
-                        updated_row[col_name] = float(user_input)
-                    else:
-                        updated_row[col_name] = user_input
-                except ValueError:
-                    logging.warning(f"Could not convert '{user_input}' to {original_dtype} for column '{col_name}'. Storing as object/string.")
-                    updated_row[col_name] = user_input
-        
-        # Update the DataFrame with the modified row
-        apt_df.loc[index] = updated_row
-        print(f"--- Finished with {row['icao']} ---")
-
-    # Save the updated DataFrame
-    try:
-        apt_df.to_parquet(apt_file_path, index=False)
-        logging.info(f"Interactive imputation completed and saved to {apt_file_path}")
-    except Exception as e:
-        logging.error(f"Failed to save parquet file after interactive imputation: {e}")
-
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description="Enrich apt.parquet with airport data and/or fill missing runway values.")
-    parser.add_argument('--scrape', action='store_true', help='Scrape airport data from SkyVector.')
-    parser.add_argument('--fillMissing', action='store_true', help='Fill missing runway elevations and then interactively prompt for other missing data.')
-    args = parser.parse_args()
-
-    if args.scrape:
-        scrape_airport_data()
-    elif args.fillMissing:
-        fill_missing_runway_data()
-    else:
-        logging.info("No action specified. Use --scrape to scrape data or --fillMissing to fill missing runway data.")
+    scrape_airport_data()
