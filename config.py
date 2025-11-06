@@ -20,7 +20,7 @@ INTERPOLATED_TRAJECTORIES_DIR = os.path.join(DATA_DIR, "interpolated_trajectorie
 
 # --- Data Preparation ---
 TEST_RUN = True
-TEST_RUN_FRACTION = 0.01  # Use a fraction of the data for test runs
+TEST_RUN_FRACTION = 0.001  # Use a fraction of the data for test runs
 
 
 # Min-Max Scaler Bounds for PINN inputs

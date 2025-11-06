@@ -58,6 +58,29 @@ def prepare_data():
     df_merged.dropna(subset=['fuel_kg', 'aircraft_type'], inplace=True)
     df_merged.reset_index(drop=True, inplace=True)
 
+    # --- 3. Handle Test Run ---
+    if config.TEST_RUN:
+        print(f"Test run enabled. Sampling {config.TEST_RUN_FRACTION:.0%} of the data.")
+        df_to_process = df_merged.sample(frac=config.TEST_RUN_FRACTION, random_state=42).copy()
+    else:
+        print("Full run mode. Processing all data.")
+        df_to_process = df_merged
+
+    # --- 4. Engineer Features ---
+    # IMPORTANT: Now reading from the interpolated trajectories directory
+    interpolated_flights_train_dir = os.path.join(config.DATA_DIR, 'interpolated_trajectories/flights_train')
+    if not os.path.exists(interpolated_flights_train_dir):
+        print(f"Error: Interpolated trajectory directory not found: {interpolated_flights_train_dir}")
+        print("Please run the 'interpolate_trajectories' stage first.")
+        return
+
+    df_featured = feature_engineering.engineer_features(
+        df_to_process,
+        flights_dir=interpolated_flights_train_dir, # Use the interpolated directory
+        start_col='start',
+        end_col='end',
+        desc="Engineering Features"
+    )
 
     # Drop columns with very high (or 100%) missing values and low correlation
     # This list is derived from data_preparation_missing_values.csv and target correlation
@@ -84,40 +107,13 @@ def prepare_data():
         'engine_options_A320-252N',
         'engine_options_A320-273N', 'engine_options_A330-341', 'engine_options_A330-342', 'engine_options_A318-112',
         'engine_options_A318-121','engine_options_A318-111','engine_options_A318-122','engine_options_A380-861',
-        'engine_options_A380-842', 'engine_options_A380-841','fuel_aircraft','fuel_engine','unknown_notrajectory_fraction'
+        'engine_options_A380-842', 'engine_options_A380-841','fuel_aircraft','fuel_engine','Unknown_NoTrajectory_fraction'
     ]
 
     # Filter out columns that don't exist in the DataFrame to avoid errors
     cols_to_drop_existing = [col for col in cols_to_drop if col in df_merged.columns]
     if cols_to_drop_existing:
-        df_merged.drop(columns=cols_to_drop_existing, inplace=True)
-
-
-    # --- 3. Handle Test Run ---
-    if config.TEST_RUN:
-        print(f"Test run enabled. Sampling {config.TEST_RUN_FRACTION:.0%} of the data.")
-        df_to_process = df_merged.sample(frac=config.TEST_RUN_FRACTION, random_state=42).copy()
-    else:
-        print("Full run mode. Processing all data.")
-        df_to_process = df_merged
-
-    # --- 4. Engineer Features ---
-    # IMPORTANT: Now reading from the interpolated trajectories directory
-    interpolated_flights_train_dir = os.path.join(config.DATA_DIR, 'interpolated_trajectories/flights_train')
-    if not os.path.exists(interpolated_flights_train_dir):
-        print(f"Error: Interpolated trajectory directory not found: {interpolated_flights_train_dir}")
-        print("Please run the 'interpolate_trajectories' stage first.")
-        return
-
-    df_featured = feature_engineering.engineer_features(
-        df_to_process,
-        flights_dir=interpolated_flights_train_dir, # Use the interpolated directory
-        start_col='start',
-        end_col='end',
-        desc="Engineering Features"
-    )
-
-
+        df_featured.drop(columns=cols_to_drop_existing, inplace=True)
 
 
 
