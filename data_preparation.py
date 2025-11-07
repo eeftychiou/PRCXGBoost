@@ -20,28 +20,41 @@ import config
 import feature_engineering
 import introspection
 
+import logging
+
+# --- Setup Logging ---
+log_file = 'data_preparation.log'
+logging.basicConfig(level=logging.INFO,
+                     format='%(asctime)s - %(levelname)s - %(message)s',
+                     handlers=[
+                         logging.FileHandler(log_file, mode='w'),
+                         logging.StreamHandler()
+                     ])
+
 def prepare_data():
     """
     Loads, preprocesses, and saves the data for the pipeline.
     This function now expects trajectory files to be pre-interpolated
     and located in the 'data/interpolated_trajectories' directory.
     """
-    print("--- Starting Data Preparation Stage ---")
+    logging.info("--- Starting Data Preparation Stage ---")
+
 
     # --- 1. Load Data ---
-    print("Loading raw data...")
+    logging.info("Loading raw data...")
+
+
     try:
         df_fuel = pd.read_parquet(os.path.join(config.DATA_DIR, 'prc-2025-datasets/fuel_train.parquet'))
         df_flightlist = pd.read_parquet(os.path.join(config.DATA_DIR, 'prc-2025-datasets/flightlist_train.parquet'))
         df_ac_perf = pd.read_csv(os.path.join(config.RAW_DATA_DIR, 'acPerfOpenAP.csv'))
         df_apt = pd.read_parquet(os.path.join(config.DATA_DIR, 'prc-2025-datasets/apt.parquet'))
     except FileNotFoundError as e:
-        print(f"Error: Raw data file not found. {e}")
+        logging.error(f"Error: Raw data file not found. {e}")
         return
 
     # --- 2. Preprocess and Merge Data ---
-    print("Preprocessing and merging all datasets...")
-
+    logging.info("Preprocessing and merging all datasets...")
 
     # Merge flight list with aircraft performance data
     df_merged = pd.merge(df_flightlist, df_ac_perf, left_on='aircraft_type', right_on='ICAO_TYPE_CODE', how='left')
@@ -60,18 +73,18 @@ def prepare_data():
 
     # --- 3. Handle Test Run ---
     if config.TEST_RUN:
-        print(f"Test run enabled. Sampling {config.TEST_RUN_FRACTION:.0%} of the data.")
+        logging.info(f"Test run enabled. Sampling {config.TEST_RUN_FRACTION:.0%} of the data.")
         df_to_process = df_merged.sample(frac=config.TEST_RUN_FRACTION, random_state=42).copy()
     else:
-        print("Full run mode. Processing all data.")
+        logging.info("Full run mode. Processing all data.")
         df_to_process = df_merged
 
     # --- 4. Engineer Features ---
     # IMPORTANT: Now reading from the interpolated trajectories directory
     interpolated_flights_train_dir = os.path.join(config.DATA_DIR, 'interpolated_trajectories/flights_train')
     if not os.path.exists(interpolated_flights_train_dir):
-        print(f"Error: Interpolated trajectory directory not found: {interpolated_flights_train_dir}")
-        print("Please run the 'interpolate_trajectories' stage first.")
+        logging.error(f"Error: Interpolated trajectory directory not found: {interpolated_flights_train_dir}")
+        logging.error("Please run the 'interpolate_trajectories' stage first.")
         return
 
     df_featured = feature_engineering.engineer_features(
@@ -108,7 +121,40 @@ def prepare_data():
         'engine_options_A320-273N', 'engine_options_A330-341', 'engine_options_A330-342', 'engine_options_A318-112',
         'engine_options_A318-121','engine_options_A318-111','engine_options_A318-122','engine_options_A380-861',
         'engine_options_A380-842', 'engine_options_A380-841','fuel_aircraft','fuel_engine','unknown_notrajectory_fraction',
-        'flaps_lambda_f','cruise_height','engine_number','clean_cd0','clean_k','clean_gears'
+        'flaps_lambda_f','cruise_height','engine_number','clean_cd0','clean_k','clean_gears',
+        'destination_RWY_2_ELEVATION_a',
+        'destination_RWY_2_ELEVATION_b',
+        'origin_RWY_2_ELEVATION_b',
+        'origin_RWY_2_ELEVATION_a',
+        'destination_RWY_6_ELEVATION_b',
+        'destination_RWY_6_ELEVATION_a',
+        'destination_RWY_7_ELEVATION_b',
+        'destination_RWY_7_ELEVATION_a',
+        'destination_RWY_4_ELEVATION_b',
+        'destination_RWY_4_ELEVATION_a',
+        'destination_RWY_3_ELEVATION_b',
+        'destination_RWY_3_ELEVATION_a',
+        'destination_RWY_1_ELEVATION_a',
+        'destination_RWY_1_ELEVATION_b',
+        'destination_RWY_5_ELEVATION_b',
+        'destination_RWY_5_ELEVATION_a',
+        'destination_RWY_8_ELEVATION_a',
+        'destination_RWY_8_ELEVATION_b',
+        'origin_RWY_8_ELEVATION_b',
+        'origin_RWY_8_ELEVATION_a',
+        'origin_RWY_6_ELEVATION_b',
+        'origin_RWY_6_ELEVATION_a',
+        'origin_RWY_7_ELEVATION_b',
+        'origin_RWY_7_ELEVATION_a',
+        'origin_RWY_4_ELEVATION_b',
+        'origin_RWY_4_ELEVATION_a',
+        'origin_RWY_3_ELEVATION_b',
+        'origin_RWY_3_ELEVATION_a',
+        'origin_RWY_1_ELEVATION_a',
+        'origin_RWY_1_ELEVATION_b',
+        'origin_RWY_5_ELEVATION_b',
+        'origin_RWY_5_ELEVATION_a',
+
 
     ]
 
@@ -117,7 +163,26 @@ def prepare_data():
     if cols_to_drop_existing:
         df_featured.drop(columns=cols_to_drop_existing, inplace=True)
 
+    # --- 5. Impute Missing Values ---
+    logging.info("Imputing missing values...")
 
+    # Impute trajectory data with median
+    trajectory_cols = ['std_vertical_rate', 'ending_altitude', 'altitude_difference', 'mean_track', 'std_track',
+                           'starting_altitude', 'mean_vertical_rate', 'mean_dist_to_origin_km', 'mean_dist_to_dest_km']
+    for col in trajectory_cols:
+        if col in df_featured.columns and df_featured[col].isnull().any():
+            median_val = df_featured[col].median()
+            df_featured[col].fillna(median_val, inplace=True)
+            logging.info(f"Imputed missing values in '{col}' with median value: {median_val}")
+
+
+    # Impute aircraft data with mode
+    aircraft_cols = ['engine_default', 'flaps_type', 'engine_mount']
+    for col in aircraft_cols:
+        if col in df_featured.columns and df_featured[col].isnull().any():
+            mode_val = df_featured[col].mode()[0]
+            df_featured[col].fillna(mode_val, inplace=True)
+            logging.info(f"Imputed missing values in '{col}' with mode value: {mode_val}")
 
 
     # --- 5. Generate Introspection Files ---
@@ -133,9 +198,9 @@ def prepare_data():
     output_filename = f"featured_data{'test' if config.TEST_RUN else ''}.parquet"
     output_path = os.path.join(config.PROCESSED_DATA_DIR, output_filename)
     df_featured.to_parquet(output_path, index=False)
-    print(f"Saved feature-rich data to {output_path}")
+    logging.info(f"Saved feature-rich data to {output_path}")
 
-    print("--- Data Preparation Stage Complete ---")
+    logging.info("--- Data Preparation Stage Complete ---")
 
 if __name__ == '__main__':
     prepare_data()
