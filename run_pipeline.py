@@ -36,6 +36,11 @@ def main():
     # Optional path to a JSON file with tuned parameters for the 'train' stage
     parser.add_argument("--params_path", type=str, default=None, help="Path to a JSON file containing hyperparameters for the 'train' stage.")
 
+    # New argument for feature selection method
+    parser.add_argument("--feature_selection", type=str, default='sfs_forward', 
+                        choices=['sfs_forward', 'sfs_backward', 'none'],
+                        help="Feature selection method for the 'train' stage (used by xgb model).")
+
     # New argument for interpolation test mode
     parser.add_argument("--test_interpolation", action="store_true", help="Run trajectory interpolation in test mode.")
 
@@ -55,7 +60,7 @@ def main():
             train_gbr.train(params_path=args.params_path)
         elif args.model == "xgb":
             print("--- Selected model: XGBoost Regressor ---")
-            train_xgb.train(params_path=args.params_path)
+            train_xgb.train(params_path=args.params_path, feature_selection_method=args.feature_selection)
         elif args.model == "rf":
             print("--- Selected model: RandomForest Regressor ---")
             train_rf.train(params_path=args.params_path)

@@ -4,6 +4,8 @@ import numpy as np
 from tqdm import tqdm
 import config
 import datetime
+from sklearn.preprocessing import StandardScaler, OneHotEncoder
+from sklearn.compose import ColumnTransformer
 
 def haversine_distance(lat1, lon1, lat2, lon2):
     """Calculate the great-circle distance between two points on the earth."""
@@ -101,8 +103,10 @@ def engineer_features(df, flights_dir, start_col='start', end_col='end', desc="E
     print(f"Applying full feature engineering pipeline...")
     enhanced_rows = []
 
-    # Constants for runway determination
-    RUNWAY_ALIGNMENT_TOLERANCE_DEG = 15 # degrees
+    # Constants
+    RUNWAY_ALIGNMENT_TOLERANCE_DEG = 15
+    PARKED_DISTANCE_THRESHOLD_KM = 0.1 # Max distance moved to be considered parked
+    PARKED_VR_THRESHOLD = 50 # Max absolute vertical rate to be considered parked
 
     for _, row in tqdm(df.iterrows(), total=len(df), desc=desc):
         new_row = row.copy()
@@ -131,7 +135,18 @@ def engineer_features(df, flights_dir, start_col='start', end_col='end', desc="E
         start_time = new_row[start_col]
         end_time = new_row[end_col]
 
-        # Always get origin/destination coordinates for distance calculations
+        # Add time delta features
+        new_row['takeoff_delta'] = (start_time - takeoff_time).total_seconds() / 60
+        new_row['landing_delta'] = (landed_time - end_time).total_seconds() / 60
+
+        # Add mean time in air feature
+        segment_midpoint_time = start_time + (end_time - start_time) / 2
+        if segment_midpoint_time > takeoff_time:
+            new_row['mean_time_in_air'] = (segment_midpoint_time - takeoff_time).total_seconds() / 60
+        else:
+            new_row['mean_time_in_air'] = 0
+
+
         origin_lat, origin_lon = row['origin_latitude'], row['origin_longitude']
         dest_lat, dest_lon = row['destination_latitude'], row['destination_longitude']
         
@@ -220,7 +235,8 @@ def engineer_features(df, flights_dir, start_col='start', end_col='end', desc="E
                     dest_lat, dest_lon,
                     origin_elev, dest_elev,
                     start_time, takeoff_time, landed_time, end_time,
-                    origin_runway_data, destination_runway_data # Pass runway data
+                    origin_runway_data, # Pass runway data
+                    destination_runway_data
                 )
                 phase_fractions = segment_traj['phase'].value_counts(normalize=True)
                 all_possible_phases = ['Takeoff', 'Climb', 'Cruise', 'Descent', 'Approach', 'Landing', 'Taxiing'] # Added 'Landing'
@@ -281,6 +297,8 @@ def engineer_features(df, flights_dir, start_col='start', end_col='end', desc="E
                 # Also set other segment-level features to NaN or 0 as no trajectory data
                 new_row['segment_duration_s'] = (end_time - start_time).total_seconds()
                 new_row['segment_distance_km'] = 0.0 # No movement recorded
+
+
         else: # No trajectory file found at all
             inferred_phase = 'Unknown_NoTrajectory'
             
@@ -308,6 +326,78 @@ def engineer_features(df, flights_dir, start_col='start', end_col='end', desc="E
             new_row['segment_duration_s'] = (end_time - start_time).total_seconds()
             new_row['segment_distance_km'] = 0.0 # No movement recorded
 
+
         enhanced_rows.append(new_row)
     
     return pd.DataFrame(enhanced_rows)
+
+def add_advanced_features(df):
+    """
+    Adds advanced features to the dataframe, such as interaction terms,
+    polynomial features, and scaled features.
+    """
+
+    print("Adding advanced features...")
+    df_copy = df.copy()
+
+    # 1. Remove Redundant Features
+    cols_to_drop = [col for col in df_copy.columns if 'limits_' in col]
+    df_copy.drop(columns=cols_to_drop, inplace=True, errors='ignore')
+    print(f"Dropped {len(cols_to_drop)} redundant 'limits_' columns.")
+
+    # 2. Create Interaction and Polynomial Features
+    if 'segment_duration_s' in df_copy.columns and 'mtow' in df_copy.columns:
+        # Impute NaNs before creating polynomial features
+        df_copy['segment_duration_s'].fillna(df_copy['segment_duration_s'].median(), inplace=True)
+        df_copy['mtow'].fillna(df_copy['mtow'].median(), inplace=True)
+
+        df_copy['duration_mtow_interaction'] = df_copy['segment_duration_s'] * df_copy['mtow']
+        df_copy['segment_duration_s_sq'] = df_copy['segment_duration_s']**2
+        df_copy['mtow_sq'] = df_copy['mtow']**2
+        print("Created interaction and polynomial features for 'segment_duration_s' and 'mtow'.")
+
+    # 3. Feature Scaling and Encoding
+    numerical_features = df_copy.select_dtypes(include=np.number).columns.tolist()
+    categorical_features = df_copy.select_dtypes(include=['object', 'category']).columns.tolist()
+
+    # The target variable should not be scaled.
+    if 'fuel_kg' in numerical_features:
+        numerical_features.remove('fuel_kg')
+
+    # Create preprocessing pipelines for numerical and categorical features
+    numerical_transformer = StandardScaler()
+    categorical_transformer = OneHotEncoder(handle_unknown='ignore', sparse_output=False)
+
+    preprocessor = ColumnTransformer(
+        transformers=[
+            ('num', numerical_transformer, numerical_features),
+            ('cat', categorical_transformer, categorical_features)
+        ],
+        remainder='passthrough'
+    )
+
+    # Fit and transform the data
+    processed_data = preprocessor.fit_transform(df_copy)
+
+    # Get feature names from the preprocessor
+    new_feature_names = preprocessor.get_feature_names_out()
+
+    # Create a new DataFrame with the processed data and correct column names
+    df_processed = pd.DataFrame(processed_data, columns=new_feature_names, index=df_copy.index)
+    
+    # The column names from get_feature_names_out are like 'num__mtow', 'cat__aircraft_type_A320', 'remainder__fuel_kg'
+    # Let's clean them up.
+    def clean_col_names(col_name):
+        if col_name.startswith('num__'):
+            return col_name[5:]
+        if col_name.startswith('cat__'):
+            return col_name[5:]
+        if col_name.startswith('remainder__'):
+            return col_name[11:]
+        return col_name
+        
+    df_processed.columns = [clean_col_names(col) for col in df_processed.columns]
+
+    print("Applied feature scaling and one-hot encoding.")
+
+    return df_processed
