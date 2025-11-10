@@ -1,0 +1,965 @@
+Data Profile Report - 20251106-015603
+
+==================================================
+Profiling: flightlist_train
+==================================================
+Shape: (11037, 9)
+
+--- Column Data Dictionary ---
+
+  Column: flight_date
+    - DType: object
+    - Missing: 0.00%
+    - Sample Values: [datetime.date(2025, 7, 21), datetime.date(2025, 5, 13), datetime.date(2025, 6, 1)]
+
+  Column: aircraft_type
+    - DType: object
+    - Missing: 0.00%
+    - Sample Values: ['B738', 'A20N', 'A320']
+
+  Column: takeoff
+    - DType: datetime64[us]
+    - Missing: 0.00%
+    - Sample Values: [Timestamp('2025-07-21 08:18:19'), Timestamp('2025-05-13 01:02:24'), Timestamp('2025-06-01 15:51:45')]
+
+  Column: landed
+    - DType: datetime64[us]
+    - Missing: 0.00%
+    - Sample Values: [Timestamp('2025-07-21 12:19:17'), Timestamp('2025-05-13 06:07:35'), Timestamp('2025-06-01 19:04:31')]
+
+  Column: origin_icao
+    - DType: object
+    - Missing: 0.00%
+    - Sample Values: ['LTFJ', 'MSLP', 'MMMM']
+
+  Column: origin_name
+    - DType: object
+    - Missing: 0.00%
+    - Sample Values: ['Istanbul Sabiha Gokcen International Airport', 'San Salvador International Airport', 'Morelia International Airport']
+
+  Column: destination_icao
+    - DType: object
+    - Missing: 0.00%
+    - Sample Values: ['EIDW', 'KLAX', 'KLAX']
+
+  Column: destination_name
+    - DType: object
+    - Missing: 0.00%
+    - Sample Values: ['Dublin Airport', 'Los Angeles International Airport', 'Los Angeles International Airport']
+
+  Column: flight_id
+    - DType: object
+    - Missing: 0.00%
+    - Sample Values: ['prc795756245', 'prc778269417', 'prc783152332']
+
+==================================================
+Profiling: flightlist_rank
+==================================================
+Shape: (1888, 9)
+
+--- Column Data Dictionary ---
+
+  Column: flight_date
+    - DType: object
+    - Missing: 0.00%
+    - Sample Values: [datetime.date(2025, 9, 16), datetime.date(2025, 9, 7), datetime.date(2025, 9, 1)]
+
+  Column: aircraft_type
+    - DType: object
+    - Missing: 0.00%
+    - Sample Values: ['A332', 'A20N', 'A320']
+
+  Column: takeoff
+    - DType: datetime64[us]
+    - Missing: 0.00%
+    - Sample Values: [Timestamp('2025-09-16 08:16:15'), Timestamp('2025-09-07 22:05:47'), Timestamp('2025-09-01 06:52:57')]
+
+  Column: landed
+    - DType: datetime64[us]
+    - Missing: 0.00%
+    - Sample Values: [Timestamp('2025-09-16 16:52:48'), Timestamp('2025-09-08 02:28:55'), Timestamp('2025-09-01 10:43:54')]
+
+  Column: origin_icao
+    - DType: object
+    - Missing: 0.00%
+    - Sample Values: ['EHAM', 'KLAX', 'KOAK']
+
+  Column: origin_name
+    - DType: object
+    - Missing: 0.00%
+    - Sample Values: ['Amsterdam Schiphol Airport', 'Los Angeles International Airport', 'Oakland International Airport']
+
+  Column: destination_icao
+    - DType: object
+    - Missing: 0.00%
+    - Sample Values: ['TNCM', 'MGGT', 'MMMM']
+
+  Column: destination_name
+    - DType: object
+    - Missing: 0.00%
+    - Sample Values: ['Sint Maarten Princess Juliana International Airport', 'Guatemala City La Aurora International Airport', 'Morelia International Airport']
+
+  Column: flight_id
+    - DType: object
+    - Missing: 0.00%
+    - Sample Values: ['prc810492061', 'prc808346205', 'prc806661628']
+
+==================================================
+Profiling: fuel_train
+==================================================
+Shape: (131530, 5)
+
+--- Column Data Dictionary ---
+
+  Column: idx
+    - DType: int64
+    - Missing: 0.00%
+    - Sample Values: [37129, 102078, 20771]
+
+  Column: flight_id
+    - DType: object
+    - Missing: 0.00%
+    - Sample Values: ['prc776755439', 'prc792496965', 'prc773844566']
+
+  Column: start
+    - DType: datetime64[ns]
+    - Missing: 0.00%
+    - Sample Values: [Timestamp('2025-05-07 04:01:44.092000'), Timestamp('2025-07-08 13:41:44.449000'), Timestamp('2025-04-25 05:23:38.287000')]
+
+  Column: end
+    - DType: datetime64[ns]
+    - Missing: 0.00%
+    - Sample Values: [Timestamp('2025-05-07 04:06:55.200000'), Timestamp('2025-07-08 13:46:31.992000'), Timestamp('2025-04-25 05:38:38.202000')]
+
+  Column: fuel_kg
+    - DType: float64
+    - Missing: 0.00%
+    - Sample Values: [500.0, 181.4368, 400.0]
+
+==================================================
+Profiling: apt
+==================================================
+Shape: (8787, 44)
+
+--- Column Data Dictionary ---
+
+  Column: icao
+    - DType: object
+    - Missing: 0.00%
+    - Sample Values: ['NTKK', 'FQXA', 'KSBX']
+
+  Column: longitude
+    - DType: float64
+    - Missing: 0.00%
+    - Sample Values: [-145.464778, 33.749896, -111.871002197]
+
+  Column: latitude
+    - DType: float64
+    - Missing: 0.00%
+    - Sample Values: [-15.485673, -24.895362, 48.5406990051]
+
+  Column: elevation
+    - DType: float64
+    - Missing: 2.48%
+    - Sample Values: [10.0, nan, 3443.0]
+
+  Column: RWY_1_ELEVATION_a
+    - DType: float64
+    - Missing: 96.31%
+    - Sample Values: [nan, nan, nan]
+
+  Column: RWY_1_ELEVATION_b
+    - DType: float64
+    - Missing: 96.31%
+    - Sample Values: [nan, nan, nan]
+
+  Column: RWY_1_HEADING_a
+    - DType: float64
+    - Missing: 96.24%
+    - Sample Values: [nan, nan, nan]
+
+  Column: RWY_1_HEADING_b
+    - DType: float64
+    - Missing: 96.24%
+    - Sample Values: [nan, nan, nan]
+
+  Column: RWY_1_LENGTH
+    - DType: float64
+    - Missing: 96.31%
+    - Sample Values: [nan, nan, nan]
+
+  Column: RWY_2_ELEVATION_a
+    - DType: float64
+    - Missing: 97.89%
+    - Sample Values: [nan, nan, nan]
+
+  Column: RWY_2_ELEVATION_b
+    - DType: float64
+    - Missing: 97.89%
+    - Sample Values: [nan, nan, nan]
+
+  Column: RWY_2_HEADING_a
+    - DType: float64
+    - Missing: 97.80%
+    - Sample Values: [nan, nan, nan]
+
+  Column: RWY_2_HEADING_b
+    - DType: float64
+    - Missing: 97.83%
+    - Sample Values: [nan, nan, nan]
+
+  Column: RWY_2_LENGTH
+    - DType: float64
+    - Missing: 97.87%
+    - Sample Values: [nan, nan, nan]
+
+  Column: RWY_3_ELEVATION_a
+    - DType: float64
+    - Missing: 99.12%
+    - Sample Values: [nan, nan, nan]
+
+  Column: RWY_3_ELEVATION_b
+    - DType: float64
+    - Missing: 99.12%
+    - Sample Values: [nan, nan, nan]
+
+  Column: RWY_3_HEADING_a
+    - DType: float64
+    - Missing: 99.08%
+    - Sample Values: [nan, nan, nan]
+
+  Column: RWY_3_HEADING_b
+    - DType: float64
+    - Missing: 99.08%
+    - Sample Values: [nan, nan, nan]
+
+  Column: RWY_3_LENGTH
+    - DType: float64
+    - Missing: 99.12%
+    - Sample Values: [nan, nan, nan]
+
+  Column: RWY_4_ELEVATION_a
+    - DType: float64
+    - Missing: 99.62%
+    - Sample Values: [nan, nan, nan]
+
+  Column: RWY_4_ELEVATION_b
+    - DType: float64
+    - Missing: 99.62%
+    - Sample Values: [nan, nan, nan]
+
+  Column: RWY_4_HEADING_a
+    - DType: float64
+    - Missing: 99.61%
+    - Sample Values: [nan, nan, nan]
+
+  Column: RWY_4_HEADING_b
+    - DType: float64
+    - Missing: 99.61%
+    - Sample Values: [nan, nan, nan]
+
+  Column: RWY_4_LENGTH
+    - DType: float64
+    - Missing: 99.62%
+    - Sample Values: [nan, nan, nan]
+
+  Column: RWY_5_ELEVATION_a
+    - DType: float64
+    - Missing: 99.87%
+    - Sample Values: [nan, nan, nan]
+
+  Column: RWY_5_ELEVATION_b
+    - DType: float64
+    - Missing: 99.87%
+    - Sample Values: [nan, nan, nan]
+
+  Column: RWY_5_HEADING_a
+    - DType: float64
+    - Missing: 99.86%
+    - Sample Values: [nan, nan, nan]
+
+  Column: RWY_5_HEADING_b
+    - DType: float64
+    - Missing: 99.86%
+    - Sample Values: [nan, nan, nan]
+
+  Column: RWY_5_LENGTH
+    - DType: float64
+    - Missing: 99.86%
+    - Sample Values: [nan, nan, nan]
+
+  Column: RWY_6_ELEVATION_a
+    - DType: float64
+    - Missing: 99.92%
+    - Sample Values: [nan, nan, nan]
+
+  Column: RWY_6_ELEVATION_b
+    - DType: float64
+    - Missing: 99.92%
+    - Sample Values: [nan, nan, nan]
+
+  Column: RWY_6_HEADING_a
+    - DType: float64
+    - Missing: 99.92%
+    - Sample Values: [nan, nan, nan]
+
+  Column: RWY_6_HEADING_b
+    - DType: float64
+    - Missing: 99.92%
+    - Sample Values: [nan, nan, nan]
+
+  Column: RWY_6_LENGTH
+    - DType: float64
+    - Missing: 99.91%
+    - Sample Values: [nan, nan, nan]
+
+  Column: RWY_7_ELEVATION_a
+    - DType: float64
+    - Missing: 99.98%
+    - Sample Values: [nan, nan, nan]
+
+  Column: RWY_7_ELEVATION_b
+    - DType: float64
+    - Missing: 99.98%
+    - Sample Values: [nan, nan, nan]
+
+  Column: RWY_7_HEADING_a
+    - DType: float64
+    - Missing: 99.98%
+    - Sample Values: [nan, nan, nan]
+
+  Column: RWY_7_HEADING_b
+    - DType: float64
+    - Missing: 99.98%
+    - Sample Values: [nan, nan, nan]
+
+  Column: RWY_7_LENGTH
+    - DType: float64
+    - Missing: 99.98%
+    - Sample Values: [nan, nan, nan]
+
+  Column: RWY_8_ELEVATION_a
+    - DType: float64
+    - Missing: 99.99%
+    - Sample Values: [nan, nan, nan]
+
+  Column: RWY_8_ELEVATION_b
+    - DType: float64
+    - Missing: 99.99%
+    - Sample Values: [nan, nan, nan]
+
+  Column: RWY_8_HEADING_a
+    - DType: float64
+    - Missing: 99.99%
+    - Sample Values: [nan, nan, nan]
+
+  Column: RWY_8_HEADING_b
+    - DType: float64
+    - Missing: 99.99%
+    - Sample Values: [nan, nan, nan]
+
+  Column: RWY_8_LENGTH
+    - DType: float64
+    - Missing: 99.99%
+    - Sample Values: [nan, nan, nan]
+
+==================================================
+Profiling: acPerfOpenAP
+==================================================
+Shape: (26, 111)
+
+--- Column Data Dictionary ---
+
+  Column: ICAO_TYPE_CODE
+    - DType: object
+    - Missing: 0.00%
+    - Sample Values: ['MD11', 'B38M', 'B77W']
+
+  Column: aircraft
+    - DType: object
+    - Missing: 0.00%
+    - Sample Values: ['McDonnell Douglas MD-11', 'Boeing 737 MAX 8', 'Boeing 777-300ER']
+
+  Column: mtow
+    - DType: float64
+    - Missing: 0.00%
+    - Sample Values: [211653.5, 82000.0, 351500.0]
+
+  Column: mlw
+    - DType: float64
+    - Missing: 0.00%
+    - Sample Values: [164422.0, 66300.0, 251300.0]
+
+  Column: oew
+    - DType: float64
+    - Missing: 0.00%
+    - Sample Values: [103218.1, 45000.0, 167800.0]
+
+  Column: mfc
+    - DType: float64
+    - Missing: 0.00%
+    - Sample Values: [116519.4, 26000.0, 181300.0]
+
+  Column: vmo
+    - DType: float64
+    - Missing: 0.00%
+    - Sample Values: [378.725, 340.0, 330.0]
+
+  Column: mmo
+    - DType: float64
+    - Missing: 0.00%
+    - Sample Values: [0.8685000000000006, 0.82, 0.89]
+
+  Column: ceiling
+    - DType: float64
+    - Missing: 0.00%
+    - Sample Values: [12734.0, 12500.0, 13100.0]
+
+  Column: pax_max
+    - DType: float64
+    - Missing: 0.00%
+    - Sample Values: [389.48, 210.0, 550.0]
+
+  Column: pax_low
+    - DType: float64
+    - Missing: 0.00%
+    - Sample Values: [230.755, 162.0, 365.0]
+
+  Column: pax_high
+    - DType: float64
+    - Missing: 0.00%
+    - Sample Values: [283.955, 178.0, 451.0]
+
+  Column: fuselage_length
+    - DType: float64
+    - Missing: 0.00%
+    - Sample Values: [58.28084999999994, 39.47, 73.86]
+
+  Column: fuselage_height
+    - DType: float64
+    - Missing: 0.00%
+    - Sample Values: [5.27195, 3.73, 6.2]
+
+  Column: fuselage_width
+    - DType: float64
+    - Missing: 0.00%
+    - Sample Values: [5.264250000000004, 3.73, 6.2]
+
+  Column: wing_area
+    - DType: float64
+    - Missing: 0.00%
+    - Sample Values: [308.55949999999973, 124.6, 436.8]
+
+  Column: wing_span
+    - DType: float64
+    - Missing: 0.00%
+    - Sample Values: [53.75604999999995, 34.32, 64.8]
+
+  Column: wing_mac
+    - DType: float64
+    - Missing: 0.00%
+    - Sample Values: [6.805437499999998, 4.17, 8.75]
+
+  Column: wing_sweep
+    - DType: float64
+    - Missing: 0.00%
+    - Sample Values: [29.172999999999952, 25.0, 31.6]
+
+  Column: wing_t/c
+    - DType: float64
+    - Missing: 0.00%
+    - Sample Values: [0.1080799999999999, 0.1098399999999996, 0.0948]
+
+  Column: flaps_type
+    - DType: object
+    - Missing: 11.54%
+    - Sample Values: [nan, 'double-slotted', 'double-slotted']
+
+  Column: flaps_area
+    - DType: float64
+    - Missing: 0.00%
+    - Sample Values: [41.01485000000012, 21.099999999996754, 67.13]
+
+  Column: flaps_bf/b
+    - DType: float64
+    - Missing: 0.00%
+    - Sample Values: [0.7060816055405239, 0.6, 0.758]
+
+  Column: flaps_lambda_f
+    - DType: float64
+    - Missing: 0.00%
+    - Sample Values: [0.8999999999998672, 0.9, 0.9]
+
+  Column: flaps_cf/c
+    - DType: float64
+    - Missing: 0.00%
+    - Sample Values: [0.1545399999999994, 0.15, 0.156]
+
+  Column: flaps_Sf/S
+    - DType: float64
+    - Missing: 0.00%
+    - Sample Values: [0.1517849999999995, 0.15, 0.154]
+
+  Column: cruise_height
+    - DType: float64
+    - Missing: 0.00%
+    - Sample Values: [11000.0, 11000.0, 11000.0]
+
+  Column: cruise_mach
+    - DType: float64
+    - Missing: 0.00%
+    - Sample Values: [0.8251699999999975, 0.79, 0.84]
+
+  Column: cruise_range
+    - DType: float64
+    - Missing: 0.00%
+    - Sample Values: [11709.0, 6600.0, 14700.0]
+
+  Column: engine_type
+    - DType: object
+    - Missing: 0.00%
+    - Sample Values: ['turbofan', 'turbofan', 'turbofan']
+
+  Column: engine_mount
+    - DType: object
+    - Missing: 11.54%
+    - Sample Values: [nan, 'wing', 'wing']
+
+  Column: engine_number
+    - DType: float64
+    - Missing: 0.00%
+    - Sample Values: [2.02, 2.0, 2.0]
+
+  Column: engine_default
+    - DType: object
+    - Missing: 11.54%
+    - Sample Values: [nan, 'LEAP-1B', 'GE90-115B']
+
+  Column: engine_options_A320-271N
+    - DType: object
+    - Missing: 96.15%
+    - Sample Values: [nan, nan, nan]
+
+  Column: engine_options_A320-272N
+    - DType: object
+    - Missing: 96.15%
+    - Sample Values: [nan, nan, nan]
+
+  Column: engine_options_A320-273N
+    - DType: object
+    - Missing: 96.15%
+    - Sample Values: [nan, nan, nan]
+
+  Column: engine_options_A320-251N
+    - DType: object
+    - Missing: 96.15%
+    - Sample Values: [nan, nan, nan]
+
+  Column: engine_options_A320-252N
+    - DType: object
+    - Missing: 96.15%
+    - Sample Values: [nan, nan, nan]
+
+  Column: engine_options_A320-253N
+    - DType: object
+    - Missing: 96.15%
+    - Sample Values: [nan, nan, nan]
+
+  Column: drag_cd0
+    - DType: float64
+    - Missing: 0.00%
+    - Sample Values: [0.0214049999999999, 0.02, 0.024]
+
+  Column: drag_k
+    - DType: float64
+    - Missing: 0.00%
+    - Sample Values: [0.041465, 0.042, 0.043]
+
+  Column: drag_e
+    - DType: float64
+    - Missing: 0.00%
+    - Sample Values: [0.7824899999999996, 0.797, 0.765]
+
+  Column: drag_gears
+    - DType: float64
+    - Missing: 0.00%
+    - Sample Values: [0.014570686742168, 0.018, 0.016]
+
+  Column: fuel_aircraft
+    - DType: object
+    - Missing: 96.15%
+    - Sample Values: [nan, nan, nan]
+
+  Column: fuel_engine
+    - DType: object
+    - Missing: 57.69%
+    - Sample Values: [nan, nan, nan]
+
+  Column: fuel_fuel_coef
+    - DType: float64
+    - Missing: 0.00%
+    - Sample Values: [5.421268177253096, 3.0383253759082125, 3.514577204066723]
+
+  Column: limits_MTOW
+    - DType: float64
+    - Missing: 0.00%
+    - Sample Values: [211653.5, 82000.0, 351500.0]
+
+  Column: limits_MLW
+    - DType: float64
+    - Missing: 0.00%
+    - Sample Values: [164422.0, 66300.0, 251300.0]
+
+  Column: limits_OEW
+    - DType: float64
+    - Missing: 0.00%
+    - Sample Values: [103218.1, 45000.0, 167800.0]
+
+  Column: limits_MFC
+    - DType: float64
+    - Missing: 0.00%
+    - Sample Values: [116519.4, 26000.0, 181300.0]
+
+  Column: limits_VMO
+    - DType: float64
+    - Missing: 0.00%
+    - Sample Values: [378.725, 340.0, 330.0]
+
+  Column: limits_MMO
+    - DType: float64
+    - Missing: 0.00%
+    - Sample Values: [0.8685000000000006, 0.82, 0.89]
+
+  Column: limits_ceiling
+    - DType: float64
+    - Missing: 0.00%
+    - Sample Values: [12734.0, 12500.0, 13100.0]
+
+  Column: engine_options_A321-271N
+    - DType: object
+    - Missing: 96.15%
+    - Sample Values: [nan, nan, nan]
+
+  Column: engine_options_A321-272N
+    - DType: object
+    - Missing: 96.15%
+    - Sample Values: [nan, nan, nan]
+
+  Column: engine_options_A321-251N
+    - DType: object
+    - Missing: 96.15%
+    - Sample Values: [nan, nan, nan]
+
+  Column: engine_options_A321-252N
+    - DType: object
+    - Missing: 96.15%
+    - Sample Values: [nan, nan, nan]
+
+  Column: engine_options_A321-253N
+    - DType: object
+    - Missing: 96.15%
+    - Sample Values: [nan, nan, nan]
+
+  Column: engine_options_A318-111
+    - DType: object
+    - Missing: 96.15%
+    - Sample Values: [nan, nan, nan]
+
+  Column: engine_options_A318-112
+    - DType: object
+    - Missing: 96.15%
+    - Sample Values: [nan, nan, nan]
+
+  Column: engine_options_A318-121
+    - DType: object
+    - Missing: 96.15%
+    - Sample Values: [nan, nan, nan]
+
+  Column: engine_options_A318-122
+    - DType: object
+    - Missing: 96.15%
+    - Sample Values: [nan, nan, nan]
+
+  Column: engine_options_A319-111
+    - DType: object
+    - Missing: 96.15%
+    - Sample Values: [nan, nan, nan]
+
+  Column: engine_options_A319-112
+    - DType: object
+    - Missing: 96.15%
+    - Sample Values: [nan, nan, nan]
+
+  Column: engine_options_A319-113
+    - DType: object
+    - Missing: 96.15%
+    - Sample Values: [nan, nan, nan]
+
+  Column: engine_options_A319-114
+    - DType: object
+    - Missing: 96.15%
+    - Sample Values: [nan, nan, nan]
+
+  Column: engine_options_A319-115
+    - DType: object
+    - Missing: 96.15%
+    - Sample Values: [nan, nan, nan]
+
+  Column: engine_options_A319-131
+    - DType: object
+    - Missing: 96.15%
+    - Sample Values: [nan, nan, nan]
+
+  Column: engine_options_A319-132
+    - DType: object
+    - Missing: 96.15%
+    - Sample Values: [nan, nan, nan]
+
+  Column: engine_options_A319-133
+    - DType: object
+    - Missing: 96.15%
+    - Sample Values: [nan, nan, nan]
+
+  Column: engine_options_A320-111
+    - DType: object
+    - Missing: 96.15%
+    - Sample Values: [nan, nan, nan]
+
+  Column: engine_options_A320-211
+    - DType: object
+    - Missing: 96.15%
+    - Sample Values: [nan, nan, nan]
+
+  Column: engine_options_A320-212
+    - DType: object
+    - Missing: 96.15%
+    - Sample Values: [nan, nan, nan]
+
+  Column: engine_options_A320-214
+    - DType: object
+    - Missing: 96.15%
+    - Sample Values: [nan, nan, nan]
+
+  Column: engine_options_A320-215
+    - DType: object
+    - Missing: 96.15%
+    - Sample Values: [nan, nan, nan]
+
+  Column: engine_options_A320-216
+    - DType: object
+    - Missing: 96.15%
+    - Sample Values: [nan, nan, nan]
+
+  Column: engine_options_A320-231
+    - DType: object
+    - Missing: 96.15%
+    - Sample Values: [nan, nan, nan]
+
+  Column: engine_options_A320-232
+    - DType: object
+    - Missing: 96.15%
+    - Sample Values: [nan, nan, nan]
+
+  Column: engine_options_A320-233
+    - DType: object
+    - Missing: 96.15%
+    - Sample Values: [nan, nan, nan]
+
+  Column: engine_options_A321-111
+    - DType: object
+    - Missing: 96.15%
+    - Sample Values: [nan, nan, nan]
+
+  Column: engine_options_A321-112
+    - DType: object
+    - Missing: 96.15%
+    - Sample Values: [nan, nan, nan]
+
+  Column: engine_options_A321-131
+    - DType: object
+    - Missing: 96.15%
+    - Sample Values: [nan, nan, nan]
+
+  Column: engine_options_A321-211
+    - DType: object
+    - Missing: 96.15%
+    - Sample Values: [nan, nan, nan]
+
+  Column: engine_options_A321-212
+    - DType: object
+    - Missing: 96.15%
+    - Sample Values: [nan, nan, nan]
+
+  Column: engine_options_A321-213
+    - DType: object
+    - Missing: 96.15%
+    - Sample Values: [nan, nan, nan]
+
+  Column: engine_options_A321-231
+    - DType: object
+    - Missing: 96.15%
+    - Sample Values: [nan, nan, nan]
+
+  Column: engine_options_A321-232
+    - DType: object
+    - Missing: 96.15%
+    - Sample Values: [nan, nan, nan]
+
+  Column: engine_options_A330-201
+    - DType: object
+    - Missing: 96.15%
+    - Sample Values: [nan, nan, nan]
+
+  Column: engine_options_A330-202
+    - DType: object
+    - Missing: 96.15%
+    - Sample Values: [nan, nan, nan]
+
+  Column: engine_options_A330-203
+    - DType: object
+    - Missing: 96.15%
+    - Sample Values: [nan, nan, nan]
+
+  Column: engine_options_A330-223
+    - DType: object
+    - Missing: 96.15%
+    - Sample Values: [nan, nan, nan]
+
+  Column: engine_options_A330-223F
+    - DType: object
+    - Missing: 96.15%
+    - Sample Values: [nan, nan, nan]
+
+  Column: engine_options_A330-243
+    - DType: object
+    - Missing: 96.15%
+    - Sample Values: [nan, nan, nan]
+
+  Column: engine_options_A330-301
+    - DType: object
+    - Missing: 96.15%
+    - Sample Values: [nan, nan, nan]
+
+  Column: engine_options_A330-302
+    - DType: object
+    - Missing: 96.15%
+    - Sample Values: [nan, nan, nan]
+
+  Column: engine_options_A330-303
+    - DType: object
+    - Missing: 96.15%
+    - Sample Values: [nan, nan, nan]
+
+  Column: engine_options_A330-321
+    - DType: object
+    - Missing: 96.15%
+    - Sample Values: [nan, nan, nan]
+
+  Column: engine_options_A330-322
+    - DType: object
+    - Missing: 96.15%
+    - Sample Values: [nan, nan, nan]
+
+  Column: engine_options_A330-323
+    - DType: object
+    - Missing: 96.15%
+    - Sample Values: [nan, nan, nan]
+
+  Column: engine_options_A330-341
+    - DType: object
+    - Missing: 96.15%
+    - Sample Values: [nan, nan, nan]
+
+  Column: engine_options_A330-342
+    - DType: object
+    - Missing: 96.15%
+    - Sample Values: [nan, nan, nan]
+
+  Column: engine_options_A330-343
+    - DType: object
+    - Missing: 96.15%
+    - Sample Values: [nan, nan, nan]
+
+  Column: engine_options_A350-941
+    - DType: object
+    - Missing: 96.15%
+    - Sample Values: [nan, nan, nan]
+
+  Column: engine_options_A380-841
+    - DType: object
+    - Missing: 96.15%
+    - Sample Values: [nan, nan, nan]
+
+  Column: engine_options_A380-842
+    - DType: object
+    - Missing: 96.15%
+    - Sample Values: [nan, nan, nan]
+
+  Column: engine_options_A380-861
+    - DType: object
+    - Missing: 96.15%
+    - Sample Values: [nan, nan, nan]
+
+  Column: engine_options
+    - DType: object
+    - Missing: 50.00%
+    - Sample Values: [nan, '["LEAP-1B"]', '["GE90-115B"]']
+
+  Column: clean_cd0
+    - DType: float64
+    - Missing: 0.00%
+    - Sample Values: [0.02, 0.02, 0.02]
+
+  Column: clean_k
+    - DType: float64
+    - Missing: 0.00%
+    - Sample Values: [0.0419999999999999, 0.0419999999999999, 0.0419999999999999]
+
+  Column: clean_e
+    - DType: float64
+    - Missing: 0.00%
+    - Sample Values: [0.7969999999999985, 0.7969999999999984, 0.7969999999999984]
+
+  Column: clean_gears
+    - DType: float64
+    - Missing: 0.00%
+    - Sample Values: [0.018, 0.018, 0.018]
+
+==================================================
+Profiling: fuel_rank_submission.parquet
+==================================================
+Shape: (24289, 5)
+
+--- Column Data Dictionary ---
+
+  Column: idx
+    - DType: int64
+    - Missing: 0.00%
+    - Sample Values: [19462, 17281, 2617]
+
+  Column: flight_id
+    - DType: object
+    - Missing: 0.00%
+    - Sample Values: ['prc811828821', 'prc811369796', 'prc807376860']
+
+  Column: start
+    - DType: datetime64[ns]
+    - Missing: 0.00%
+    - Sample Values: [Timestamp('2025-09-21 11:27:49.791000'), Timestamp('2025-09-19 15:56:56.815000'), Timestamp('2025-09-04 04:58:54.660000')]
+
+  Column: end
+    - DType: datetime64[ns]
+    - Missing: 0.00%
+    - Sample Values: [Timestamp('2025-09-21 11:29:27.850000'), Timestamp('2025-09-19 16:01:56.512000'), Timestamp('2025-09-04 05:03:56.791000')]
+
+  Column: fuel_kg
+    - DType: float32
+    - Missing: 0.00%
+    - Sample Values: [166.52650451660156, 84.1405258178711, 147.3766326904297]
+
+==================================================
+Profiling Trajectories: flights_train
+==================================================
+Analyzing a sample of 500 out of 11037 trajectory files...
+
+Discovered Columns: ['CAS', 'TAS', 'altitude', 'flight_id', 'groundspeed', 'latitude', 'longitude', 'mach', 'source', 'timestamp', 'track', 'typecode', 'vertical_rate']
