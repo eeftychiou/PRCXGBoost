@@ -160,7 +160,7 @@ def interpolate_trajectories(test_mode: bool = False, sample_size: int = 5, diff
             for col in columns_to_interpolate:
                 if col in df.columns:
                     df[col] = df.groupby('flight_id')[col].transform(
-                        lambda group: group.interpolate(method='pchip', limit_direction='both', limit_area='inside')
+                        lambda group: group.interpolate(method='pchip', limit_direction='both')
                     )
                     df[col].fillna(0, inplace=True)
                 else:
