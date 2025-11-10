@@ -26,22 +26,38 @@ def is_aligned_vectorized(tracks, runway_headings, tolerance=5):
     
     return np.any(alignment_matrix, axis=1)
 
-def classify_flight_phases_vectorized(traj_df, origin_alt, dest_alt, origin_lat, origin_lon, dest_lat, dest_lon, origin_runways, dest_runways):
+def is_aligned_with_runway(track, runway_headings, tolerance=15):
+    """
+    Checks if the given track is aligned with any of the runway headings.
+    Track and runway_headings are in degrees.
+    """
+    if pd.isna(track) or not runway_headings:
+        return False
+    for heading in runway_headings:
+        if pd.notna(heading):
+            # Calculate the absolute difference, considering the circular nature of angles
+            diff = abs(track - heading)
+            if min(diff, 360 - diff) <= tolerance:
+                return True
+    return False
+
+def classify_flight_phases_vectorized(traj_df, origin_alt, dest_alt, origin_runways, dest_runways, takeoff_time, landed_time):
     """Classifies flight phases using physical criteria including runway alignment."""
     df = traj_df.copy()
 
     # --- Constants ---
     NM_TO_KM = 1.852
-    DISTANCE_THRESHOLD_KM = 20 * NM_TO_KM
-    TAXI_IN_ALT_THRESHOLD_FT = 25
-    TAXI_IN_SPEED_THRESHOLD_KNOTS = 100
-    TAXI_OUT_ALT_THRESHOLD_FT = 25
-    TAXI_OUT_SPEED_THRESHOLD_KNOTS = 30
-    MIN_TAXI_SPEED_THRESHOLD_KNOTS = 5
+    APPROACH_DISTANCE_THRESHOLD_KM = 20 * NM_TO_KM
+    ON_THE_GROUND_ALT_THRESHOLD_FT = 25
+    MIN_TOUCHDOWN_SPEED = 110
+    MAX_TOUCHDOWN_SPEED = 160
+    MAX_TAXI_SPEED = 30
+    MIN_TAXI_SPEED = 5
     TAKEOFF_ALT_THRESHOLD_FT = 1000
-    LANDING_ALT_THRESHOLD_FT = 2000
-    PARKED_SPEED_THRESHOLD_KNOTS = 5
-    CRUISE_VR_THRESHOLD = 300
+    LANDING_ALT_THRESHOLD_FT = 3000
+    PARKED_DISTANCE_THRESHOLD = 5
+
+
     CLIMB_DESCENT_VR_THRESHOLD = 500
     APPROACH_ALT_THRESHOLD_AGL = 10000
 
@@ -50,12 +66,11 @@ def classify_flight_phases_vectorized(traj_df, origin_alt, dest_alt, origin_lat,
     df['alt_agl_dest'] = df['altitude'] - dest_alt
     
     if 'groundspeed' in df.columns and df['groundspeed'].notna().any():
-        df['speed'] = df['groundspeed'].fillna(df['calculated_speed'])
+        df['speed'] = df['groundspeed'].replace(0, np.nan).fillna(df['calculated_speed'])
     else:
         df['speed'] = df['calculated_speed']
 
-    df['dist_to_origin_km'] = haversine_vectorized(df['latitude'], df['longitude'], origin_lat, origin_lon)
-    df['dist_to_dest_km'] = haversine_vectorized(df['latitude'], df['longitude'], dest_lat, dest_lon)
+    # dist_to_origin_km and dist_to_dest_km are now expected in traj_df
     
     aligned_with_origin_rwy = is_aligned_vectorized(df['track'], origin_runways)
     aligned_with_dest_rwy = is_aligned_vectorized(df['track'], dest_runways)
@@ -64,41 +79,46 @@ def classify_flight_phases_vectorized(traj_df, origin_alt, dest_alt, origin_lat,
     df['phase'] = 'Unknown'
 
     # --- Phase Classification (in order of precedence) ---
-    # 1. Landing
-    cond_landing = (df['dist_to_dest_km'] <= DISTANCE_THRESHOLD_KM) & \
+    # 1. Parked
+    if pd.notna(takeoff_time) and pd.notna(landed_time):
+        cond_parked_gate =  (df['phase'] == 'Unknown') & ((df['timestamp'] < takeoff_time) | (df['timestamp'] > landed_time)) & \
+                            (df['speed'] < MIN_TAXI_SPEED) & ((df['alt_agl_origin'] <= ON_THE_GROUND_ALT_THRESHOLD_FT) | (df['alt_agl_dest'] <= ON_THE_GROUND_ALT_THRESHOLD_FT)) & \
+                            ((df['dist_to_origin_km'] < PARKED_DISTANCE_THRESHOLD) | (df['dist_to_dest_km'] < PARKED_DISTANCE_THRESHOLD ))
+
+        df.loc[cond_parked_gate, 'phase'] = 'Parked'
+
+
+    # 2. Landing
+    cond_landing = (df['phase'] == 'Unknown') & (df['dist_to_dest_km'] <= APPROACH_DISTANCE_THRESHOLD_KM) & \
                    (df['alt_agl_dest'] < LANDING_ALT_THRESHOLD_FT) & \
-                   (df['speed'] < 160) & (df['speed'] > TAXI_IN_SPEED_THRESHOLD_KNOTS) & \
+                   (df['speed'] < MAX_TOUCHDOWN_SPEED) & (df['speed'] > MIN_TOUCHDOWN_SPEED) & \
                    (aligned_with_dest_rwy)
     df.loc[cond_landing, 'phase'] = 'Landing'
 
     # 2. Takeoff
     cond_takeoff = (df['phase'] == 'Unknown') & \
-                   (df['dist_to_origin_km'] <= DISTANCE_THRESHOLD_KM) & \
-                   (df['speed'] > 30) & \
+                   (df['dist_to_origin_km'] <= PARKED_DISTANCE_THRESHOLD) & \
+                   (df['speed'] > MAX_TAXI_SPEED) & (df['alt_agl_origin'] < TAKEOFF_ALT_THRESHOLD_FT) & (df['alt_agl_origin'] >= ON_THE_GROUND_ALT_THRESHOLD_FT) & \
                    (aligned_with_origin_rwy)
     df.loc[cond_takeoff, 'phase'] = 'Takeoff'
 
     # 3. Taxi-in
-    cond_taxi_in = (df['phase'] == 'Unknown') & (df['alt_agl_dest'] <= TAXI_IN_ALT_THRESHOLD_FT) & (df['speed'] < TAXI_IN_SPEED_THRESHOLD_KNOTS) & (df['dist_to_dest_km'] <= DISTANCE_THRESHOLD_KM) & (df['speed'] > MIN_TAXI_SPEED_THRESHOLD_KNOTS)
+    cond_taxi_in = (df['phase'] == 'Unknown') & (df['alt_agl_dest'] <= ON_THE_GROUND_ALT_THRESHOLD_FT) & (df['speed'] < MAX_TAXI_SPEED) & (df['dist_to_dest_km'] <= PARKED_DISTANCE_THRESHOLD) & (df['speed'] > MIN_TAXI_SPEED)
     df.loc[cond_taxi_in, 'phase'] = 'Taxi-in'
 
     # 4. Taxi-out
-    cond_taxi_out = (df['phase'] == 'Unknown') & (df['alt_agl_origin'] <= TAXI_OUT_ALT_THRESHOLD_FT) & (df['speed'] < TAXI_OUT_SPEED_THRESHOLD_KNOTS) & (df['speed'] > MIN_TAXI_SPEED_THRESHOLD_KNOTS) & (df['dist_to_origin_km'] <= DISTANCE_THRESHOLD_KM)
+    cond_taxi_out = (df['phase'] == 'Unknown') & (df['alt_agl_origin'] <= ON_THE_GROUND_ALT_THRESHOLD_FT) & (df['speed'] < MAX_TAXI_SPEED) & (df['speed'] > MIN_TAXI_SPEED) & (df['dist_to_origin_km'] <= PARKED_DISTANCE_THRESHOLD)
     df.loc[cond_taxi_out, 'phase'] = 'Taxi-out'
-
-    # 5. Parked
-    cond_parked = df['phase'].isin(['Taxi-in', 'Taxi-out']) & (df['speed'] < PARKED_SPEED_THRESHOLD_KNOTS)
-    df.loc[cond_parked, 'phase'] = 'Parked'
 
     # 6. Air phases
     in_air_mask = (df['phase'] == 'Unknown')
-    cond_approach = in_air_mask & (df['vertical_rate'] < -CRUISE_VR_THRESHOLD) & (df['alt_agl_dest'] < APPROACH_ALT_THRESHOLD_AGL)
+    cond_approach = in_air_mask & (df['vertical_rate'] < -CLIMB_DESCENT_VR_THRESHOLD) & (df['alt_agl_dest'] < APPROACH_ALT_THRESHOLD_AGL)
     df.loc[cond_approach, 'phase'] = 'Approach'
     cond_climb = in_air_mask & (df['phase'] == 'Unknown') & (df['vertical_rate'] > CLIMB_DESCENT_VR_THRESHOLD)
     df.loc[cond_climb, 'phase'] = 'Climb'
     cond_descent = in_air_mask & (df['phase'] == 'Unknown') & (df['vertical_rate'] < -CLIMB_DESCENT_VR_THRESHOLD)
     df.loc[cond_descent, 'phase'] = 'Descent'
-    df.loc[in_air_mask & (df['phase'] == 'Unknown'), 'phase'] = 'Cruise'
+    df.loc[in_air_mask & (df['phase'] == 'Unknown') & ((df['alt_agl_dest'] > ON_THE_GROUND_ALT_THRESHOLD_FT) | (df['alt_agl_origin'] > ON_THE_GROUND_ALT_THRESHOLD_FT)), 'phase'] = 'Cruise'
 
     return df['phase']
 
@@ -117,10 +137,14 @@ def augment_features(file_path, trajectories_folder):
             df[f'{col}_encoded'] = LabelEncoder().fit_transform(df[col])
     df['start'] = pd.to_datetime(df['start'])
     df['end'] = pd.to_datetime(df['end'])
+    if 'takeoff' in df.columns:
+        df['takeoff'] = pd.to_datetime(df['takeoff'])
+    if 'landed' in df.columns:
+        df['landed'] = pd.to_datetime(df['landed'])
     df['segment_duration'] = (df['end'] - df['start']).dt.total_seconds()
 
     # Initialize Columns
-    numeric_traj_cols = ['latitude', 'longitude', 'altitude', 'groundspeed', 'track', 'vertical_rate', 'mach', 'TAS', 'CAS', 'calculated_speed', 'vertical_rate_change']
+    numeric_traj_cols = ['latitude', 'longitude', 'altitude', 'groundspeed', 'track', 'vertical_rate', 'mach', 'TAS', 'CAS', 'calculated_speed', 'vertical_rate_change', 'dist_to_origin_km', 'dist_to_dest_km']
     aggregations = ['min', 'max', 'mean', 'std']
     for col in numeric_traj_cols:
         for agg in aggregations:
@@ -129,6 +153,11 @@ def augment_features(file_path, trajectories_folder):
     for phase in all_phases:
         df[f'phase_fraction_{phase.lower()}'] = 0.0
     df['start_alt_rev'], df['end_alt_rev'] = np.nan, np.nan
+    df['departure_rwy_heading'] = 0.0
+    df['departure_rwy_length'] = 0.0
+    df['arrival_rwy_heading'] = 0.0
+    df['arrival_rwy_length'] = 0.0
+    df['segment_distance_km'] = 0.0
 
     print("Processing trajectory data for each flight...")
     for flight_id, group in tqdm(df.groupby('flight_id'), total=df['flight_id'].nunique()):
@@ -152,15 +181,36 @@ def augment_features(file_path, trajectories_folder):
 
         # Collect Runway and Flight Info
         flight_info = group.iloc[0]
-        origin_runways = [flight_info[c] for c in flight_info.index if 'origin_RWY' in c and 'HEADING' in c and pd.notna(flight_info[c])]
-        dest_runways = [flight_info[c] for c in flight_info.index if 'destination_RWY' in c and 'HEADING' in c and pd.notna(flight_info[c])]
+        origin_runway_data = {}
+        destination_runway_data = {}
+        for i in range(1, 9):
+            for suffix in ['', 'a', 'b']:
+                origin_rwy_heading_col = f'origin_RWY_{i}_HEADING_{suffix}'
+                origin_rwy_length_col = f'origin_RWY_{i}_LENGTH'
+                dest_rwy_heading_col = f'destination_RWY_{i}_HEADING_{suffix}'
+                dest_rwy_length_col = f'destination_RWY_{i}_LENGTH'
+
+                if origin_rwy_heading_col in flight_info and pd.notna(flight_info[origin_rwy_heading_col]):
+                    origin_runway_data[f'RWY_{i}{suffix}'] = {
+                        'heading': flight_info[origin_rwy_heading_col],
+                        'length': flight_info.get(origin_rwy_length_col, 0.0)
+                    }
+                if dest_rwy_heading_col in flight_info and pd.notna(flight_info[dest_rwy_heading_col]):
+                    destination_runway_data[f'RWY_{i}{suffix}'] = {
+                        'heading': flight_info[dest_rwy_heading_col],
+                        'length': flight_info.get(dest_rwy_length_col, 0.0)
+                    }
         
+        origin_runway_headings = [r['heading'] for r in origin_runway_data.values() if pd.notna(r['heading'])]
+        dest_runway_headings = [r['heading'] for r in destination_runway_data.values() if pd.notna(r['heading'])]
+
+        traj_df['dist_to_origin_km'] = haversine_vectorized(traj_df['latitude'], traj_df['longitude'], flight_info.get('origin_latitude'), flight_info.get('origin_longitude'))
+        traj_df['dist_to_dest_km'] = haversine_vectorized(traj_df['latitude'], traj_df['longitude'], flight_info.get('destination_latitude'), flight_info.get('destination_longitude'))
+
         # Classify Phases
         traj_df['phase'] = classify_flight_phases_vectorized(
             traj_df, flight_info.get('origin_elevation', 0), flight_info.get('destination_elevation', 0),
-            flight_info.get('origin_latitude'), flight_info.get('origin_longitude'),
-            flight_info.get('destination_latitude'), flight_info.get('destination_longitude'),
-            origin_runways, dest_runways
+            origin_runway_headings, dest_runway_headings, flight_info.get('takeoff'), flight_info.get('landed')
         )
         
         valid_numeric_cols = [col for col in numeric_traj_cols if col in traj_df.columns]
@@ -168,14 +218,71 @@ def augment_features(file_path, trajectories_folder):
         # Aggregate features for each segment
         for idx, row in group.iterrows():
             segment_traj = traj_df[(traj_df['timestamp'] >= row['start']) & (traj_df['timestamp'] <= row['end'])]
-            if segment_traj.empty: continue
 
-            stats = segment_traj[valid_numeric_cols].agg(aggregations)
+            # If the segment is empty, find the closest points in the trajectory to represent it
+            if segment_traj.empty:
+                if traj_df.empty or len(traj_df) < 2:
+                    continue  # Not enough trajectory data for this flight
+
+                n_points = 5
+                if len(traj_df) < n_points:
+                    indices_to_use = traj_df.index
+                else:
+                    start_indices = (traj_df['timestamp'] - row['start']).abs().nsmallest(n_points).index
+                    end_indices = (traj_df['timestamp'] - row['end']).abs().nsmallest(n_points).index
+                    combined_indices = start_indices.union(end_indices)
+                    indices_to_use = combined_indices
+                segment_for_features = traj_df.loc[indices_to_use]
+            else:
+                segment_for_features = segment_traj
+
+            if segment_for_features.empty:
+                continue
+
+            # Calculate segment distance
+            valid_dist_points = segment_for_features.dropna(subset=['latitude', 'longitude'])
+            if len(valid_dist_points) > 1:
+                segment_dist = haversine_vectorized(
+                    valid_dist_points['latitude'].shift(1), valid_dist_points['longitude'].shift(1),
+                    valid_dist_points['latitude'], valid_dist_points['longitude']
+                ).sum()
+                df.loc[idx, 'segment_distance_km'] = segment_dist
+            else:
+                df.loc[idx, 'segment_distance_km'] = 0.0
+
+            # Determine Departure and Arrival Runway
+            takeoff_points = segment_for_features[segment_for_features['phase'] == 'Takeoff']
+            if not takeoff_points.empty:
+                departure_rwy_found = False
+                for _, point in takeoff_points.iterrows():
+                    for rwy_id, rwy_info in origin_runway_data.items():
+                        if is_aligned_with_runway(point['track'], [rwy_info['heading']]):
+                            df.loc[idx, 'departure_rwy_heading'] = rwy_info['heading']
+                            df.loc[idx, 'departure_rwy_length'] = rwy_info['length']
+                            departure_rwy_found = True
+                            break
+                    if departure_rwy_found:
+                        break
+            
+            landing_points = segment_for_features[segment_for_features['phase'] == 'Landing']
+            if not landing_points.empty:
+                arrival_rwy_found = False
+                for _, point in landing_points.iloc[::-1].iterrows():
+                    for rwy_id, rwy_info in destination_runway_data.items():
+                        if is_aligned_with_runway(point['track'], [rwy_info['heading']]):
+                            df.loc[idx, 'arrival_rwy_heading'] = rwy_info['heading']
+                            df.loc[idx, 'arrival_rwy_length'] = rwy_info['length']
+                            arrival_rwy_found = True
+                            break
+                    if arrival_rwy_found:
+                        break
+
+            stats = segment_for_features[valid_numeric_cols].agg(aggregations)
             for col in valid_numeric_cols:
                 for agg in aggregations:
                     df.loc[idx, f'seg_{col}_{agg}'] = stats.loc[agg, col]
             
-            phase_counts = segment_traj['phase'].value_counts(normalize=True)
+            phase_counts = segment_for_features['phase'].value_counts(normalize=True)
             for phase_name, fraction in phase_counts.items():
                 df.loc[idx, f'phase_fraction_{phase_name.lower()}'] = fraction
 
@@ -193,15 +300,25 @@ def augment_features(file_path, trajectories_folder):
         if min_col in df.columns and max_col in df.columns:
             df[f'seg_{col}_delta'] = df[max_col] - df[min_col]
 
+    # Add Time-Based Features
+    if 'takeoff' in df.columns and 'landed' in df.columns:
+        print("Calculating time-based features (takeoff_delta, landing_delta, mean_time_in_air)...")
+        
+        df['takeoff_delta'] = (df['start'] - df['takeoff']).dt.total_seconds() / 60
+        df['landing_delta'] = (df['landed'] - df['end']).dt.total_seconds() / 60
+        segment_midpoint_time = df['start'] + (df['end'] - df['start']) / 2
+        mean_time_in_air = (segment_midpoint_time - df['takeoff']).dt.total_seconds() / 60
+        df['mean_time_in_air'] = np.maximum(0, mean_time_in_air)
+
     # Save File
     df.to_parquet(output_path, index=False)
     print(f"Saved augmented file to: {output_path}")
 
 if __name__ == "__main__":
-    processed_data_folder = 'data/processed'
+    processed_data_folder = 'processed'
     base_trajectories_folder = 'data/interpolated_trajectories'
     
-    rank_data_path = os.path.join(processed_data_folder, 'featured_rank_data.parquet')
+    rank_data_path = os.path.join(processed_data_folder, 'processed_data_test.parquet')
     if os.path.exists(rank_data_path):
         augment_features(rank_data_path, os.path.join(base_trajectories_folder, 'flights_rank'))
 
