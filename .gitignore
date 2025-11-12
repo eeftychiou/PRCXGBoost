@@ -1,2 +1,6 @@
-/processed/
-/introspection/
+# Ignore generated data files
+processed/featured_data_augmented.parquet
+introspection/*/data_preparation/data_preparation_output.csv
+
+# Ignore Python compiled files
+*.pyc
