@@ -7,7 +7,7 @@ import logging
 # --- Core Paths ---
 DATA_DIR = "data"
 RAW_DATA_DIR = os.path.join(DATA_DIR, "acPerf")
-PROCESSED_DATA_DIR = os.path.join(DATA_DIR, "processed")
+PROCESSED_DATA_DIR = os.path.join("processed")
 INTROSPECTION_DIR = "introspection"
 MODELS_DIR = "models"
 
@@ -21,7 +21,7 @@ INTERPOLATED_TRAJECTORIES_DIR = os.path.join(DATA_DIR, "interpolated_trajectorie
 
 # --- Data Preparation ---
 TEST_RUN = False
-TEST_RUN_FRACTION = 0.05  # Use a fraction of the data for test runs
+TEST_RUN_FRACTION = 0.1  # Use a fraction of the data for test runs
 
 
 # Min-Max Scaler Bounds for PINN inputs

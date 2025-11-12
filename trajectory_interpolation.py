@@ -127,15 +127,10 @@ def interpolate_trajectories(test_mode: bool = False, sample_size: int = 5, diff
     for file_path, sub_dir in tqdm(files_to_process, desc="Interpolating trajectories", unit="file"):
         file_name = os.path.basename(file_path)
         output_dir = os.path.join(output_base_dir, sub_dir)
+        output_file_path = os.path.join(output_dir, file_name)
         os.makedirs(output_dir, exist_ok=True)
 
-        processed_log_path = os.path.join(output_dir, 'processed_files.txt')
-        already_processed_files = set()
-        if os.path.exists(processed_log_path):
-            with open(processed_log_path, 'r') as f:
-                already_processed_files = set(f.read().splitlines())
-
-        if file_name in already_processed_files and not test_mode:
+        if os.path.exists(output_file_path) and not test_mode:
             logger.info(f"Skipping already processed file: {file_name}")
             continue
 
@@ -159,9 +154,16 @@ def interpolate_trajectories(test_mode: bool = False, sample_size: int = 5, diff
 
             for col in columns_to_interpolate:
                 if col in df.columns:
-                    df[col] = df.groupby('flight_id')[col].transform(
-                        lambda group: group.interpolate(method='pchip', limit_direction='both')
-                    )
+                    # Check if there are enough data points for pchip interpolation
+                    if df[col].notna().sum() >= 2:
+                        df[col] = df.groupby('flight_id')[col].transform(
+                            lambda group: group.interpolate(method='pchip', limit_direction='both')
+                        )
+                    else:
+                        # Fallback to linear interpolation if not enough data points
+                        df[col] = df.groupby('flight_id')[col].transform(
+                            lambda group: group.interpolate(method='linear', limit_direction='both')
+                        )
                     df[col].fillna(0, inplace=True)
                 else:
                     logger.warning(f"Column '{col}' not found in {file_path}. Skipping interpolation.")
@@ -175,12 +177,7 @@ def interpolate_trajectories(test_mode: bool = False, sample_size: int = 5, diff
                 df.to_csv(output_file_path, index=False)
                 logger.info(f"Saved test output to {output_file_path}")
             else:
-                output_file_path = os.path.join(output_dir, file_name)
                 df.to_parquet(output_file_path, index=False)
-
-            if not test_mode:
-                with open(processed_log_path, 'a') as f:
-                    f.write(f"{file_name}\n")
 
             processed_count += 1
 

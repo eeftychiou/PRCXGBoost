@@ -23,9 +23,8 @@ def haversine_distance(lat1, lon1, lat2, lon2):
 
 def plot_flight_segments_on_map():
     """
-    Reads flight data, detects discontinuities based on implied speed,
-    and plots the continuous flight segments on an interactive globe,
-    incorporating airport and flight ranking data.
+    Reads flight data, detects discontinuities, and plots flight segments
+    on an interactive globe and a separate vertical profile chart.
     """
     pd.set_option('display.max_columns', None)
 
@@ -42,45 +41,67 @@ def plot_flight_segments_on_map():
 
     # --- Step 2: Select and Load Trajectory File ---
     default_path = os.path.join(base_path, 'flights_train')
-    directory_path_input = input(f"Enter directory path for trajectory files (press Enter for default: '{default_path}'): ")
+    path_input = input(f"Enter directory path for trajectory files or a specific file path (press Enter for default: '{default_path}'): ")
 
-    directory_path = directory_path_input if directory_path_input else default_path
-    if not directory_path_input:
-        print(f"Using default path: '{directory_path}'")
+    if not path_input:
+        path_input = default_path
+        print(f"Using default path: '{path_input}'")
 
-    if not os.path.isdir(directory_path):
-        print(f"Error: Directory '{directory_path}' not found.")
+    if not os.path.exists(path_input):
+        print(f"Error: Path '{path_input}' not found.")
         return
 
-    try:
-        parquet_files = [f for f in os.listdir(directory_path) if f.endswith(('.parquet', '.parq'))]
-        if not parquet_files:
-            print(f"No Parquet files found in '{directory_path}'.")
-            return
-    except OSError as e:
-        print(f"Error accessing directory: {e}")
-        return
+    file_path = None
 
-    print("\nAvailable Trajectory files:")
-    for i, file_name in enumerate(parquet_files):
-        print(f"  [{i}] {file_name}")
-
-    selected_file = None
-    while selected_file is None:
+    if os.path.isdir(path_input):
+        directory_path = path_input
         try:
-            file_index = int(input("\nEnter the number of the file to load: "))
-            if 0 <= file_index < len(parquet_files):
-                selected_file = parquet_files[file_index]
-            else:
-                print("Invalid number. Please try again.")
-        except ValueError:
-            print("Invalid input. Please enter a number.")
+            parquet_files = sorted([f for f in os.listdir(directory_path) if f.endswith(('.parquet', '.parq'))])
+            if not parquet_files:
+                print(f"No Parquet files found in '{directory_path}'.")
+                return
+        except OSError as e:
+            print(f"Error accessing directory: {e}")
+            return
 
-    file_path = os.path.join(directory_path, selected_file)
+        print("\nAvailable Trajectory files:")
+        for i, file_name in enumerate(parquet_files):
+            print(f"  [{i}] {file_name}")
+
+        selected_file = None
+        while selected_file is None:
+            identifier = input("\nEnter the number or name of the file to load: ")
+            try:
+                file_index = int(identifier)
+                if 0 <= file_index < len(parquet_files):
+                    selected_file = parquet_files[file_index]
+                else:
+                    print("Invalid number. Please try again.")
+            except ValueError:
+                if identifier in parquet_files:
+                    selected_file = identifier
+                else:
+                    print(f"Invalid file name '{identifier}'. Please try again.")
+        
+        file_path = os.path.join(directory_path, selected_file)
+
+    elif os.path.isfile(path_input):
+        if path_input.endswith(('.parquet', '.parq')):
+            file_path = path_input
+        else:
+            print(f"Error: '{path_input}' is not a Parquet file.")
+            return
+    else:
+        print(f"Error: Path '{path_input}' is not a valid directory or file.")
+        return
+
+    if not file_path:
+        print("No file selected to load.")
+        return
 
     try:
         flight_df = pd.read_parquet(file_path)
-        print(f"\nSuccessfully loaded {selected_file}.")
+        print(f"\nSuccessfully loaded {os.path.basename(file_path)}.")
     except Exception as e:
         print(f"An error occurred while reading the file: {e}")
         return
@@ -120,96 +141,79 @@ def plot_flight_segments_on_map():
     flight_df['time_diff_hours'] = (flight_df['timestamp'] - flight_df['time_prev']) / np.timedelta64(1, 'h')
     flight_df['implied_speed_kmh'] = flight_df['distance_km'] / flight_df['time_diff_hours']
 
-    speed_threshold = 1500  # km/h
+    speed_threshold = 1500
     flight_df['is_discontinuity'] = flight_df['implied_speed_kmh'] > speed_threshold
     flight_df['segment_id'] = flight_df['is_discontinuity'].cumsum()
 
     num_segments = flight_df['segment_id'].nunique()
     print(f"Detected {num_segments} continuous segment(s) for this flight.")
 
-    # --- Step 5: Plot the Segments and Relevant Airports ---
-    title = f'Flight Path for {flight_id_to_plot}'
+    # --- Step 5: Plot the Geographic Path ---
+    title_map = f'Flight Path for {flight_id_to_plot}'
     if flight_details is not None:
-        title = f'Flight Path for {flight_id_to_plot}: {flight_details["origin_icao"]} to {flight_details["destination_icao"]}'
+        title_map = f'Flight Path for {flight_id_to_plot}: {flight_details["origin_icao"]} to {flight_details["destination_icao"]}'
 
-    fig = go.Figure()
+    fig_map = go.Figure()
 
-    # Add flight path segments and position reports
     for segment_id in flight_df['segment_id'].unique():
         segment_df = flight_df[flight_df['segment_id'] == segment_id]
         
-        custom_hover_text = (
-            "<b>Timestamp:</b> " + segment_df['timestamp'].astype(str) + "<br>" +
-            "<b>Altitude:</b> " + segment_df['altitude'].astype(str) + " ft<br>" +
-            "<b>Groundspeed:</b> " + segment_df['groundspeed'].astype(str) + " kts<br>" +
-            "<b>Implied Speed:</b> " + segment_df['implied_speed_kmh'].round(2).astype(str) + " km/h<br>" +
-            "<b>Fuel:</b> " + segment_df['fuel_kg'].astype(str) + " kg"
-        )
-
-        # Segment line
-        fig.add_trace(go.Scattergeo(
-            lon=segment_df['longitude'],
-            lat=segment_df['latitude'],
-            mode='lines',
-            line=dict(width=2),
-            name=f'Segment {segment_id}',
-            hoverinfo='text',
-            text=f'Segment {segment_id}'
+        # Create a dynamic hover template
+        hover_template = "".join([f"<b>{col}:</b> %{{customdata[{i}]}}<br>" for i, col in enumerate(segment_df.columns)])
+        
+        fig_map.add_trace(go.Scattergeo(
+            lon=segment_df['longitude'], lat=segment_df['latitude'], mode='lines+markers',
+            line=dict(width=2), marker=dict(size=4), name=f'Segment {segment_id}',
+            hovertemplate=hover_template,
+            customdata=segment_df.values
         ))
 
-        # Position reports (markers), hidden by default
-        fig.add_trace(go.Scattergeo(
-            lon=segment_df['longitude'],
-            lat=segment_df['latitude'],
-            mode='markers',
-            marker=dict(size=4),
-            name=f'Segment {segment_id} - Positions',
-            visible='legendonly',
-            hoverinfo='text',
-            text=custom_hover_text
-        ))
-
-    # Add designated airports
     if flight_details is not None and not df_apt.empty:
-        origin_icao = flight_details["origin_icao"]
-        dest_icao = flight_details["destination_icao"]
-        origin_apt = df_apt[df_apt['icao'] == origin_icao]
-        dest_apt = df_apt[df_apt['icao'] == dest_icao]
+        origin_icao, dest_icao = flight_details["origin_icao"], flight_details["destination_icao"]
+        origin_apt, dest_apt = df_apt[df_apt['icao'] == origin_icao], df_apt[df_apt['icao'] == dest_icao]
 
         if not origin_apt.empty:
-            fig.add_trace(go.Scattergeo(
-                lon=origin_apt['longitude'],
-                lat=origin_apt['latitude'],
-                text=origin_apt['icao'],
-                hoverinfo='text',
-                mode='markers+text',
-                textposition="top right",
-                marker=dict(size=10, color='green'),
-                name='Departure'
+            fig_map.add_trace(go.Scattergeo(
+                lon=origin_apt['longitude'], lat=origin_apt['latitude'], text=origin_apt['icao'], hoverinfo='text',
+                mode='markers+text', textposition="top right", marker=dict(size=10, color='green'), name='Departure'
             ))
-        
         if not dest_apt.empty:
-            fig.add_trace(go.Scattergeo(
-                lon=dest_apt['longitude'],
-                lat=dest_apt['latitude'],
-                text=dest_apt['icao'],
-                hoverinfo='text',
-                mode='markers+text',
-                textposition="top right",
-                marker=dict(size=10, color='red'),
-                name='Destination'
+            fig_map.add_trace(go.Scattergeo(
+                lon=dest_apt['longitude'], lat=dest_apt['latitude'], text=dest_apt['icao'], hoverinfo='text',
+                mode='markers+text', textposition="top right", marker=dict(size=10, color='red'), name='Destination'
             ))
 
-    fig.update_layout(
-        title_text=title,
+    fig_map.update_layout(
+        title_text=title_map, showlegend=True, geo=dict(projection_type='orthographic'),
+        margin={"r": 0, "t": 40, "l": 0, "b": 0}, title_x=0.5
+    )
+    fig_map.show()
+
+    # --- Step 6: Plot the Vertical Profile ---
+    title_vertical = f'Vertical Profile for Flight {flight_id_to_plot}'
+    fig_vertical = go.Figure()
+
+    for segment_id in flight_df['segment_id'].unique():
+        segment_df = flight_df[flight_df['segment_id'] == segment_id]
+        
+        # Create a dynamic hover template
+        hover_template = "".join([f"<b>{col}:</b> %{{customdata[{i}]}}<br>" for i, col in enumerate(segment_df.columns)])
+
+        fig_vertical.add_trace(go.Scatter(
+            x=segment_df['timestamp'], y=segment_df['altitude'], mode='lines+markers',
+            marker=dict(size=4), name=f'Segment {segment_id}', 
+            hovertemplate=hover_template,
+            customdata=segment_df.values
+        ))
+
+    fig_vertical.update_layout(
+        title_text=title_vertical,
+        xaxis_title="Time",
+        yaxis_title="Altitude (ft)",
         showlegend=True,
-        geo=dict(
-            projection_type='orthographic'
-        ),
-        margin={"r": 0, "t": 40, "l": 0, "b": 0},
         title_x=0.5
     )
-    fig.show()
+    fig_vertical.show()
 
 
 if __name__ == '__main__':

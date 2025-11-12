@@ -14,7 +14,7 @@ def haversine_vectorized(lat1, lon1, lat2, lon2):
     c = 2 * np.arctan2(np.sqrt(a), np.sqrt(1 - a))
     return R * c
 
-def is_aligned_vectorized(tracks, runway_headings, tolerance=5):
+def is_aligned_vectorized(tracks, runway_headings, tolerance=15):
     """Vectorized check for runway alignment."""
     if not runway_headings:
         return pd.Series(False, index=tracks.index)
@@ -49,7 +49,7 @@ def classify_flight_phases_vectorized(traj_df, origin_alt, dest_alt, origin_runw
     NM_TO_KM = 1.852
     APPROACH_DISTANCE_THRESHOLD_KM = 20 * NM_TO_KM
     ON_THE_GROUND_ALT_THRESHOLD_FT = 25
-    MIN_TOUCHDOWN_SPEED = 110
+    MIN_TOUCHDOWN_SPEED = 100
     MAX_TOUCHDOWN_SPEED = 160
     MAX_TAXI_SPEED = 30
     MIN_TAXI_SPEED = 5
@@ -98,12 +98,14 @@ def classify_flight_phases_vectorized(traj_df, origin_alt, dest_alt, origin_runw
     # 2. Takeoff
     cond_takeoff = (df['phase'] == 'Unknown') & \
                    (df['dist_to_origin_km'] <= PARKED_DISTANCE_THRESHOLD) & \
-                   (df['speed'] > MAX_TAXI_SPEED) & (df['alt_agl_origin'] < TAKEOFF_ALT_THRESHOLD_FT) & (df['alt_agl_origin'] >= ON_THE_GROUND_ALT_THRESHOLD_FT) & \
+                   (df['speed'] > MAX_TAXI_SPEED) & (df['alt_agl_origin'] < TAKEOFF_ALT_THRESHOLD_FT)  & \
                    (aligned_with_origin_rwy)
     df.loc[cond_takeoff, 'phase'] = 'Takeoff'
 
     # 3. Taxi-in
-    cond_taxi_in = (df['phase'] == 'Unknown') & (df['alt_agl_dest'] <= ON_THE_GROUND_ALT_THRESHOLD_FT) & (df['speed'] < MAX_TAXI_SPEED) & (df['dist_to_dest_km'] <= PARKED_DISTANCE_THRESHOLD) & (df['speed'] > MIN_TAXI_SPEED)
+    cond_taxi_in = ((df['phase'] == 'Unknown') & (df['alt_agl_dest'] <= ON_THE_GROUND_ALT_THRESHOLD_FT) & \
+                    (df['speed'] <= (MAX_TAXI_SPEED+70)) & (df['dist_to_dest_km'] <= PARKED_DISTANCE_THRESHOLD) & \
+                    (df['speed'] > MIN_TAXI_SPEED))
     df.loc[cond_taxi_in, 'phase'] = 'Taxi-in'
 
     # 4. Taxi-out
@@ -114,7 +116,7 @@ def classify_flight_phases_vectorized(traj_df, origin_alt, dest_alt, origin_runw
     in_air_mask = (df['phase'] == 'Unknown')
     cond_approach = in_air_mask & (df['vertical_rate'] < -CLIMB_DESCENT_VR_THRESHOLD) & (df['alt_agl_dest'] < APPROACH_ALT_THRESHOLD_AGL)
     df.loc[cond_approach, 'phase'] = 'Approach'
-    cond_climb = in_air_mask & (df['phase'] == 'Unknown') & (df['vertical_rate'] > CLIMB_DESCENT_VR_THRESHOLD)
+    cond_climb = in_air_mask & (df['phase'] == 'Unknown') & (df['vertical_rate'] > CLIMB_DESCENT_VR_THRESHOLD) & (df['dist_to_origin_km'] > PARKED_DISTANCE_THRESHOLD)
     df.loc[cond_climb, 'phase'] = 'Climb'
     cond_descent = in_air_mask & (df['phase'] == 'Unknown') & (df['vertical_rate'] < -CLIMB_DESCENT_VR_THRESHOLD)
     df.loc[cond_descent, 'phase'] = 'Descent'
@@ -122,14 +124,8 @@ def classify_flight_phases_vectorized(traj_df, origin_alt, dest_alt, origin_runw
 
     return df['phase']
 
-def augment_features(file_path, trajectories_folder):
-    output_path = file_path.replace('.parquet', '_augmented.parquet')
-    if os.path.exists(output_path):
-        print(f"Augmented file already exists, skipping: {output_path}")
-        return
-
-    print(f"Processing file: {file_path}")
-    df = pd.read_parquet(file_path)
+def augment_features(df, trajectories_folder):
+    print("Augmenting features...")
 
     # Basic Feature Engineering
     for col in ['aircraft_type', 'origin_icao', 'destination_icao']:
@@ -310,18 +306,10 @@ def augment_features(file_path, trajectories_folder):
         mean_time_in_air = (segment_midpoint_time - df['takeoff']).dt.total_seconds() / 60
         df['mean_time_in_air'] = np.maximum(0, mean_time_in_air)
 
-    # Save File
-    df.to_parquet(output_path, index=False)
-    print(f"Saved augmented file to: {output_path}")
+    print("Feature augmentation complete.")
+    return df
 
 if __name__ == "__main__":
-    processed_data_folder = 'processed'
-    base_trajectories_folder = 'data/interpolated_trajectories'
-    
-    rank_data_path = os.path.join(processed_data_folder, 'processed_data_test.parquet')
-    if os.path.exists(rank_data_path):
-        augment_features(rank_data_path, os.path.join(base_trajectories_folder, 'flights_rank'))
-
-    data_path = os.path.join(processed_data_folder, 'featured_data.parquet')
-    if os.path.exists(data_path):
-        augment_features(data_path, os.path.join(base_trajectories_folder, 'flights_train'))
+    # This block is now outdated due to signature change of augment_features.
+    # It's left here for reference but will not run correctly.
+    pass
