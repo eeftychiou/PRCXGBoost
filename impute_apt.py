@@ -25,6 +25,7 @@ logging.basicConfig(level=logging.INFO,
 apt_file_path = 'data/prc-2025-datasets/apt.parquet'
 train_flights_path = 'data/prc-2025-datasets/flightlist_train.parquet'
 rank_flights_path = 'data/prc-2025-datasets/flightlist_rank.parquet'
+final_flights_path = 'data/prc-2025-datasets/flightlist_final.parquet'
 original_apt_file_path = apt_file_path + '.original.parquet'
 HTML_DIR = 'htmlfile'  # Directory to save HTML files for debugging
 
@@ -48,12 +49,15 @@ def scrape_airport_data():
     try:
         train_df = pd.read_parquet(train_flights_path)
         rank_df = pd.read_parquet(rank_flights_path)
+        final_df= pd.read_parquet(final_flights_path)
         
         relevant_airports = set(train_df['origin_icao'].unique()) | \
                             set(train_df['destination_icao'].unique()) | \
                             set(rank_df['origin_icao'].unique()) | \
-                            set(rank_df['destination_icao'].unique())
-        
+                            set(rank_df['destination_icao'].unique()) |\
+                            set(final_df['origin_icao'].unique()) | \
+                            set(final_df['destination_icao'].unique())
+
         airports_to_process_df = apt_df[apt_df['icao'].isin(relevant_airports)].copy()
         
         logging.info(f"Found {len(relevant_airports)} unique airports in flight lists.")
@@ -113,12 +117,14 @@ def scrape_airport_data():
             continue
 
         # --- Extract Airport Elevation ---
+        airport_elevation = pd.NA
         elevation_text_node = soup.find(string=re.compile(r"Elevation is\s"))
         if elevation_text_node:
             elevation_match = re.search(r'(\d+\.?\d*)', elevation_text_node)
             if elevation_match:
                 elevation_ft = float(elevation_match.group(1))
                 row_update['elevation'] = elevation_ft
+                airport_elevation = elevation_ft
                 logging.info(f"  - Found Airport Elevation: {elevation_ft} ft")
             else:
                 logging.warning(f"  - Elevation pattern not matched in: {elevation_text_node.strip()}. HTML file: {html_path}")
@@ -169,6 +175,7 @@ def scrape_airport_data():
                     # Headings and Elevations are typically in rows within this table
                     heading_row = details_table.find('th', string=re.compile(r'Runway Heading:'))
                     elevation_row = details_table.find('th', string=re.compile(r'Elevation:'))
+                    glide_slope_row = details_table.find('th', string=re.compile(r'Glide Slope Indicator'))
 
                     heading_a, heading_b = pd.NA, pd.NA
                     if heading_row:
@@ -204,8 +211,27 @@ def scrape_airport_data():
                             logging.info(f"        - Parsed Elevations: {elevation_a} ft, {elevation_b} ft")
                         except (AttributeError, IndexError, ValueError) as e:
                             logging.warning(f"        - Could not parse elevations for 'h4' runway {i+1}: {e}. HTML file: {html_path}")
+                    elif glide_slope_row:
+                        tds = glide_slope_row.find_next_siblings('td')
+                        try:
+                            # Attempt to parse elevation from PAPI text
+                            papi_text = tds[1].text
+                            papi_match = re.search(r'(\d+\.?\d*)\s*ft', papi_text)
+                            if papi_match:
+                                papi_elevation = float(papi_match.group(1))
+                                runway_details['ELEVATION_a'] = papi_elevation
+                                runway_details['ELEVATION_b'] = papi_elevation
+                                logging.info(f"        - Parsed Elevation from PAPI: {papi_elevation} ft")
+                            else:
+                                runway_details['ELEVATION_a'] = airport_elevation
+                                runway_details['ELEVATION_b'] = airport_elevation
+                                logging.warning(f"        - Could not parse elevation from PAPI text for 'h4' runway {i+1}. Using airport elevation. HTML file: {html_path}")
+                        except (AttributeError, IndexError, ValueError) as e:
+                            logging.warning(f"        - Error parsing PAPI for 'h4' runway {i+1}: {e}. HTML file: {html_path}")
                     else:
-                        logging.warning(f"        - Runway Elevation row not found for 'h4' runway {i+1}. HTML file: {html_path}")
+                        runway_details['ELEVATION_a'] = airport_elevation
+                        runway_details['ELEVATION_b'] = airport_elevation
+                        logging.warning(f"        - Runway Elevation row not found for 'h4' runway {i+1}. Using airport elevation. HTML file: {html_path}")
                 else:
                     logging.warning(f"      - Runway details table not found for 'h4' runway {i+1}. HTML file: {html_path}")
                 
@@ -291,8 +317,8 @@ def scrape_airport_data():
                         try:
                             # Expecting two tds for elevation_a and elevation_b
                             if len(tds) >= 2:
-                                elevation_a = float(tds[0].text)
-                                elevation_b = float(tds[1].text)
+                                elevation_a = float(tds[0].text) if tds[0].text.strip() else pd.NA
+                                elevation_b = float(tds[1].text) if tds[1].text.strip() else pd.NA
                                 runway_details['ELEVATION_a'] = elevation_a
                                 runway_details['ELEVATION_b'] = elevation_b
                                 logging.info(f"        - Parsed Elevations: {elevation_a} ft, {elevation_b} ft")
@@ -301,6 +327,11 @@ def scrape_airport_data():
                         except (AttributeError, IndexError, ValueError) as e:
                             logging.warning(f"        - Error parsing elevations for '{runway_title}': {e}. HTML file: {html_path}")
                     
+                if 'ELEVATION_a' not in runway_details or 'ELEVATION_b' not in runway_details:
+                    runway_details['ELEVATION_a'] = airport_elevation
+                    runway_details['ELEVATION_b'] = airport_elevation
+                    logging.warning(f"      - Runway elevation not found for '{runway_title}'. Using airport elevation. HTML file: {html_path}")
+
                 if runway_details:
                     runways_data.append(runway_details)
                 else:
@@ -308,25 +339,49 @@ def scrape_airport_data():
 
         logging.info(f"  - Finished runway extraction. Found {len(runways_data)} valid runway(s).")
 
-        # --- Populate row_update with runway data and fill missing with first runway's data ---
+        # --- Populate row_update with runway data and fill missing with NA ---
         if runways_data:
-            first_runway_data = runways_data[0]
+            # 2. Count the total number of runways available and insert it into a new column called rwy_number.
+            num_runways = len(runways_data)
+            row_update['rwy_number'] = num_runways
+
+            # 3. Count the total runway lengths and insert into a new column called tot_rwy_len.
+            total_length = sum(rwy.get('LENGTH', 0) for rwy in runways_data if pd.notna(rwy.get('LENGTH')))
+            row_update['tot_rwy_len'] = total_length
+
+            # 4. Calculate the average runway length.
+            if num_runways > 0:
+                row_update['avg_rwy_len'] = total_length / num_runways
+            else:
+                row_update['avg_rwy_len'] = pd.NA
+
+            # Assign runway details, setting to NA if a runway is not available
             for i in range(1, 9):  # For RWY_1 to RWY_8
-                rwy_data_to_use = first_runway_data
                 if i <= len(runways_data):
                     rwy_data_to_use = runways_data[i-1]
                     logging.info(f"  - Assigning details for Runway {i} from scraped data.")
+                    for detail_key in ['LENGTH', 'HEADING_a', 'HEADING_b', 'ELEVATION_a', 'ELEVATION_b']:
+                        col_name = f'RWY_{i}_{detail_key}'
+                        value = rwy_data_to_use.get(detail_key, pd.NA)
+                        row_update[col_name] = value
+                        if pd.isna(value):
+                            logging.warning(f"    - Missing detail '{detail_key}' for Runway {i} for {icao_code}. Using NA. HTML file: {html_path}")
                 else:
-                    logging.info(f"  - Filling Runway {i} with details from Runway 1 for {icao_code}.")
-
+                    logging.info(f"  - No data for Runway {i} for {icao_code}. Setting to NA.")
+                    for detail_key in ['LENGTH', 'HEADING_a', 'HEADING_b', 'ELEVATION_a', 'ELEVATION_b']:
+                        col_name = f'RWY_{i}_{detail_key}'
+                        row_update[col_name] = pd.NA
+        else:
+            row_update['rwy_number'] = 0
+            row_update['tot_rwy_len'] = 0
+            row_update['avg_rwy_len'] = pd.NA
+            logging.warning(f"  - No runway data found for {icao_code}. All runway columns will be NA. HTML file: {html_path}")
+            # Explicitly set all RWY_x_... columns to NA if no runways are found
+            for i in range(1, 9):
                 for detail_key in ['LENGTH', 'HEADING_a', 'HEADING_b', 'ELEVATION_a', 'ELEVATION_b']:
                     col_name = f'RWY_{i}_{detail_key}'
-                    value = rwy_data_to_use.get(detail_key, pd.NA)
-                    row_update[col_name] = value
-                    if pd.isna(value):
-                        logging.warning(f"    - Missing detail '{detail_key}' for Runway {i} for {icao_code}. Using NA. HTML file: {html_path}")
-        else:
-            logging.warning(f"  - No runway data found for {icao_code}. All runway columns will be NA. HTML file: {html_path}")
+                    row_update[col_name] = pd.NA
+
 
         logging.info(f"Data extracted for {icao_code}: {row_update}")
         updated_data.append(row_update)
@@ -360,6 +415,14 @@ def manual_update_airport(icao_code, data_to_update):
     apt_df.set_index('icao', inplace=True)
 
     if icao_code in apt_df.index:
+        # First, set all potential runway columns to NA for this ICAO to clear previous data
+        for i in range(1, 9):
+            for detail_key in ['LENGTH', 'HEADING_a', 'HEADING_b', 'ELEVATION_a', 'ELEVATION_b']:
+                col_name = f'RWY_{i}_{detail_key}'
+                if col_name in apt_df.columns:
+                    apt_df.loc[icao_code, col_name] = pd.NA
+        
+        # Then apply the specific updates
         for col, value in data_to_update.items():
             if col not in apt_df.columns:
                 apt_df[col] = pd.NA # Add column if it doesn't exist
@@ -382,6 +445,9 @@ if __name__ == '__main__':
     # Manual update for LTDB
     ltdb_data = {
         'elevation': 19, # feet
+        'rwy_number': 2,
+        'tot_rwy_len': 7000,
+        'avg_rwy_len': 3500,
         'RWY_1_LENGTH': 3500,
         'RWY_1_HEADING_a': 3,
         'RWY_1_HEADING_b': 21,
@@ -392,14 +458,22 @@ if __name__ == '__main__':
         'RWY_2_HEADING_b': 21,
         'RWY_2_ELEVATION_a': 19,
         'RWY_2_ELEVATION_b': 19,
+        # Explicitly setting remaining runways to NA for LTDB
+        'RWY_3_LENGTH': pd.NA, 'RWY_3_HEADING_a': pd.NA, 'RWY_3_HEADING_b': pd.NA, 'RWY_3_ELEVATION_a': pd.NA, 'RWY_3_ELEVATION_b': pd.NA,
+        'RWY_4_LENGTH': pd.NA, 'RWY_4_HEADING_a': pd.NA, 'RWY_4_HEADING_b': pd.NA, 'RWY_4_ELEVATION_a': pd.NA, 'RWY_4_ELEVATION_b': pd.NA,
+        'RWY_5_LENGTH': pd.NA, 'RWY_5_HEADING_a': pd.NA, 'RWY_5_HEADING_b': pd.NA, 'RWY_5_ELEVATION_a': pd.NA, 'RWY_5_ELEVATION_b': pd.NA,
+        'RWY_6_LENGTH': pd.NA, 'RWY_6_HEADING_a': pd.NA, 'RWY_6_HEADING_b': pd.NA, 'RWY_6_ELEVATION_a': pd.NA, 'RWY_6_ELEVATION_b': pd.NA,
+        'RWY_7_LENGTH': pd.NA, 'RWY_7_HEADING_a': pd.NA, 'RWY_7_HEADING_b': pd.NA, 'RWY_7_ELEVATION_a': pd.NA, 'RWY_7_ELEVATION_b': pd.NA,
+        'RWY_8_LENGTH': pd.NA, 'RWY_8_HEADING_a': pd.NA, 'RWY_8_HEADING_b': pd.NA, 'RWY_8_ELEVATION_a': pd.NA, 'RWY_8_ELEVATION_b': pd.NA,
     }
 
-    # Fill remaining runways (3 to 8) with Runway 1 data
-    for i in range(3, 9):
-        ltdb_data[f'RWY_{i}_LENGTH'] = ltdb_data['RWY_1_LENGTH']
-        ltdb_data[f'RWY_{i}_HEADING_a'] = ltdb_data['RWY_1_HEADING_a']
-        ltdb_data[f'RWY_{i}_HEADING_b'] = ltdb_data['RWY_1_HEADING_b']
-        ltdb_data[f'RWY_{i}_ELEVATION_a'] = ltdb_data['RWY_1_ELEVATION_a']
-        ltdb_data[f'RWY_{i}_ELEVATION_b'] = ltdb_data['RWY_1_ELEVATION_b']
-
     manual_update_airport('LTDB', ltdb_data)
+
+    # Manual update for ZGBH
+    zgbh_data = {
+        'elevation': 10, # feet - Placeholder, actual value not available
+        'rwy_number': 0,
+        'tot_rwy_len': 0,
+        'avg_rwy_len': pd.NA,
+    }
+    manual_update_airport('ZGBH', zgbh_data)
