@@ -139,6 +139,21 @@ def augment_features(df, trajectories_folder):
         df['landed'] = pd.to_datetime(df['landed'])
     df['segment_duration'] = (df['end'] - df['start']).dt.total_seconds()
 
+    # --- Added Features ---
+    print("Adding new features: flight duration, great circle distance, day of week, and time of day...")
+    if 'takeoff' in df.columns and 'landed' in df.columns:
+        df['flight_duration_hours'] = (df['landed'] - df['takeoff']).dt.total_seconds() / 3600
+
+    if all(c in df.columns for c in ['origin_latitude', 'origin_longitude', 'destination_latitude', 'destination_longitude']):
+        df['great_circle_distance_km'] = haversine_vectorized(
+            df['origin_latitude'], df['origin_longitude'],
+            df['destination_latitude'], df['destination_longitude']
+        )
+
+    df['day_of_week'] = df['start'].dt.dayofweek
+    df['start_time_decimal'] = df['start'].dt.hour + df['start'].dt.minute / 60.0
+    df['end_time_decimal'] = df['end'].dt.hour + df['end'].dt.minute / 60.0
+
     # Initialize Columns
     numeric_traj_cols = ['latitude', 'longitude', 'altitude', 'groundspeed', 'track', 'vertical_rate', 'mach', 'TAS', 'CAS', 'calculated_speed', 'vertical_rate_change', 'dist_to_origin_km', 'dist_to_dest_km']
     aggregations = ['min', 'max', 'mean', 'std']
@@ -174,6 +189,9 @@ def augment_features(df, trajectories_folder):
         traj_df['calculated_speed'] = traj_df['calculated_speed'].replace([np.inf, -np.inf], np.nan)
         if 'vertical_rate' in traj_df.columns:
             traj_df['vertical_rate_change'] = traj_df['vertical_rate'].diff()
+
+        if 'vertical_rate' in traj_df.columns:
+            traj_df['track_change'] = traj_df['track'].diff()
 
         # Collect Runway and Flight Info
         flight_info = group.iloc[0]
@@ -300,6 +318,9 @@ def augment_features(df, trajectories_folder):
     if 'takeoff' in df.columns and 'landed' in df.columns:
         print("Calculating time-based features (takeoff_delta, landing_delta, mean_time_in_air)...")
         
+        # De-fragment the DataFrame before adding new columns
+        df = df.copy()
+
         df['takeoff_delta'] = (df['start'] - df['takeoff']).dt.total_seconds() / 60
         df['landing_delta'] = (df['landed'] - df['end']).dt.total_seconds() / 60
         segment_midpoint_time = df['start'] + (df['end'] - df['start']) / 2

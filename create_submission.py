@@ -178,7 +178,7 @@ def main():
 
         if use_artifacts:
             # Engineer features with the same label encoders used in training
-            df_eng, _ = train_xgb.engineer_features(df_featured.copy(), label_encoders=label_encoders, fit_encoders=False)
+            df_eng, _ = train_xgb.engineer_features(df_featured.copy(), label_encoders=label_encoders, fit_encoders=True)
 
             # Ensure all spec features exist in df_eng
             numerical_features = spec.get('numerical_features', [])

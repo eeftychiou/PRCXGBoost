@@ -96,7 +96,7 @@ def _get_columns_to_drop():
         # Added based on 20251111-182738 after-imputation introspection (extremely high missing)
         'phase_fraction_unknown',
         # High missing rate among engineered trajectory dispersion features
-        'alt_diff_rev_std',
+        'alt_diff_rev_std'
     ]
 
 def prepare_data():

@@ -138,38 +138,38 @@ def interpolate_trajectories(test_mode: bool = False, sample_size: int = 5, diff
             df_original = pd.read_parquet(file_path)
             df = df_original.copy()
 
-            time_indexed = False
             if 'timestamp' in df.columns:
                 df['timestamp'] = pd.to_datetime(df['timestamp'])
-                df = df.sort_values(by='timestamp')
+                # Sort by flight_id and timestamp to ensure correct order for diff()
+                df = df.sort_values(by=['flight_id', 'timestamp'])
                 if df.duplicated(subset=['timestamp']).any():
                     logger.warning(f"Found duplicate timestamps in {file_name}. Keeping first entry.")
                     df.drop_duplicates(subset=['timestamp'], keep='first', inplace=True)
-                df.set_index('timestamp', inplace=True)
-                time_indexed = True
             else:
                 logger.warning(f"Timestamp column not found in {file_path}. Skipping time-based interpolation.")
 
-            initial_missing_counts = df[columns_to_interpolate].isnull().sum()
-
-            for col in columns_to_interpolate:
+            # First, interpolate all columns except vertical_rate
+            for col in [c for c in columns_to_interpolate if c != 'vertical_rate']:
                 if col in df.columns:
-                    # Check if there are enough data points for pchip interpolation
-                    if df[col].notna().sum() >= 2:
-                        df[col] = df.groupby('flight_id')[col].transform(
-                            lambda group: group.interpolate(method='pchip', limit_direction='both')
-                        )
-                    else:
-                        # Fallback to linear interpolation if not enough data points
-                        df[col] = df.groupby('flight_id')[col].transform(
-                            lambda group: group.interpolate(method='linear', limit_direction='both')
-                        )
-                    df[col].fillna(0, inplace=True)
+                    df[col] = df.groupby('flight_id')[col].transform(lambda group: group.interpolate(method='linear', limit_direction='both'))
                 else:
                     logger.warning(f"Column '{col}' not found in {file_path}. Skipping interpolation.")
 
-            if time_indexed:
-                df.reset_index(inplace=True)
+            # Now, handle vertical_rate
+            if 'vertical_rate' in df.columns and 'altitude' in df.columns:
+                # Calculate altitude difference per flight
+                altitude_diff = df.groupby('flight_id')['altitude'].diff()
+
+                # Fill only the null values of vertical_rate
+                df['vertical_rate'].fillna(altitude_diff, inplace=True)
+
+                # Fill any remaining NaNs (like the first entry per flight) with 0
+                df['vertical_rate'].fillna(0, inplace=True)
+            elif 'vertical_rate' not in df.columns:
+                logger.warning(f"Column 'vertical_rate' not found in {file_path}. Skipping calculation.")
+            elif 'altitude' not in df.columns:
+                logger.warning(f"Column 'altitude' not found in {file_path}. Cannot calculate vertical_rate.")
+
 
             if test_mode:
                 output_filename = file_name.replace('.parquet', '.csv')

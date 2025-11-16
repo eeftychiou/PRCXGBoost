@@ -132,36 +132,10 @@ def engineer_features(df, label_encoders=None, fit_encoders=False, is_test=False
         else:
             df_eng['aircraft_encoded'] = pd.Categorical(df_eng['aircraft']).codes
 
-    if 'starting_mass_kg' not in df_eng.columns:
-        df_eng['starting_mass_kg'] = 50000
+
 
     df_eng['mtow_kg'] = df_eng['aircraft'].apply(lambda a: get_aircraft_specs(a)[0])
 
-
-
-    df_eng['alt_start_ft'] = df_eng.get('alt_start_ft', 0)
-    df_eng['alt_end_ft'] = df_eng.get('alt_end_ft', 0)
-    df_eng['alt_change_ft'] = df_eng.get('alt_change_ft', 0)
-    df_eng['alt_avg_ft'] = (df_eng['alt_start_ft'] + df_eng['alt_end_ft']) / 2
-    df_eng['gs_avg_kts'] = df_eng.get('gs_avg_kts', 0)
-    df_eng['vs_avg_fpm'] = df_eng.get('vs_avg_fpm', 0)
-
-    if 'phase' in df_eng.columns:
-        df_eng['is_climb'] = (df_eng['phase'].str.upper() == 'CLIMB').astype(int)
-        df_eng['is_descent'] = (df_eng['phase'].str.upper() == 'DESCENT').astype(int)
-        df_eng['is_cruise'] = (df_eng['phase'].str.upper() == 'CRUISE').astype(int)
-        df_eng['is_on_ground'] = (df_eng['phase'].str.upper() == 'ON_GROUND').astype(int)
-    else:
-        df_eng['is_climb'] = 0
-        df_eng['is_descent'] = 0
-        df_eng['is_cruise'] = 0
-        df_eng['is_on_ground'] = 0
-
-    df_eng['interval_duration_sec'] = df_eng.get('interval_duration_sec', 60)
-    df_eng['altitude_change_rate'] = df_eng['alt_change_ft'] / (df_eng['interval_duration_sec'] + 1e-6)
-
-    if 'origin_icao' not in df_eng.columns:
-        df_eng['origin_icao'] = 'UNKNOWN'
 
     if fit_encoders:
         le_origin = LabelEncoder()
@@ -192,13 +166,6 @@ def engineer_features(df, label_encoders=None, fit_encoders=False, is_test=False
         else:
             df_eng['destination_icao_encoded'] = pd.Categorical(df_eng['destination_icao']).codes
 
-    if 'great_circle_distance' not in df_eng.columns:
-        df_eng['great_circle_distance'] = np.nan
-
-    df_eng['flight_duration_hours'] = df_eng['interval_duration_sec'] / 3600
-
-    if 'aircraft_type' not in df_eng.columns:
-        df_eng['aircraft_type'] = df_eng['aircraft'].apply(lambda a: get_aircraft_specs(a)[2])
 
     # VECTORIZED datetime extraction - MUCH FASTER
     logger.info("Extracting datetime features (vectorized)...")
@@ -227,6 +194,7 @@ def engineer_features(df, label_encoders=None, fit_encoders=False, is_test=False
         df_eng['end_month'] = np.nan
 
     # Encode datetime strings
+    logger.info("Encode datetime strings (vectorized)...")
     if fit_encoders:
         le_start_date = LabelEncoder()
         df_eng['start_date_encoded'] = le_start_date.fit_transform(df_eng['start_date'].astype(str))
@@ -245,6 +213,7 @@ def engineer_features(df, label_encoders=None, fit_encoders=False, is_test=False
         label_encoders['end_time'] = le_end_time
     else:
         # For test data, handle unseen values
+        logger.info("Encode datetime strings handle unseen values (vectorized)...")
         if is_test:
             oe_start_date = OrdinalEncoder(handle_unknown='use_encoded_value', unknown_value=-1, dtype=np.int64)
             df_eng['start_date_encoded'] = oe_start_date.fit_transform(df_eng[['start_date']]).astype(int).squeeze()
@@ -295,10 +264,9 @@ def engineer_features(df, label_encoders=None, fit_encoders=False, is_test=False
             else:
                 df_eng['end_time_encoded'] = pd.Categorical(df_eng['end_time']).codes
 
-    # Convert zero values to NaN for gs_avg_kts and vs_avg_fpm
-    df_eng.loc[df_eng['gs_avg_kts'] == 0, 'gs_avg_kts'] = np.nan
-    df_eng.loc[df_eng['vs_avg_fpm'] == 0, 'vs_avg_fpm'] = np.nan
 
+
+    logger.info("Finished Engineer Features")
     return df_eng, label_encoders
 
 
@@ -390,16 +358,16 @@ def train(params_path=None, feature_selection_method='sfs_forward'):
         X_train_imputed.loc[:, categorical_features] = X_train_arr_cat_enc
         logger.info(f"[+] Fitted categorical imputer and encoder on {len(categorical_features)} features")
 
-    # Optional export of training inputs (without external openap reference)
-    try:
-        train_export = X_train_imputed.copy()
-        train_export['actual_fuel_kg'] = y_train_full
-        train_export['log_fuel_kg'] = y_train_log
-        train_csv_path = os.path.join('xgboost_training_input.csv')
-        train_export.to_csv(train_csv_path, index=False)
-        logger.info(f"[+] Training CSV: {train_csv_path} ({len(train_export):,} rows)")
-    except Exception as e:
-        logger.warning(f"Could not export training CSV: {e}")
+    # # Optional export of training inputs (without external openap reference)
+    # try:
+    #     train_export = X_train_imputed.copy()
+    #     train_export['actual_fuel_kg'] = y_train_full
+    #     train_export['log_fuel_kg'] = y_train_log
+    #     train_csv_path = os.path.join('xgboost_training_input.csv')
+    #     train_export.to_csv(train_csv_path, index=False)
+    #     logger.info(f"[+] Training CSV: {train_csv_path} ({len(train_export):,} rows)")
+    # except Exception as e:
+    #     logger.warning(f"Could not export training CSV: {e}")
 
     scaler = StandardScaler()
     X_train_scaled_arr = scaler.fit_transform(X_train_imputed)
@@ -454,6 +422,7 @@ def train(params_path=None, feature_selection_method='sfs_forward'):
 
     # --- 4. Train Final Model ---
     if config.TEST_RUN:
+        # Preserve original indices for flight_id mapping
         X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=0.2, random_state=42)
         print(f"Test Run: Training on {len(X_train)} samples, validating on {len(X_val)} samples.")
     else:
@@ -481,13 +450,27 @@ def train(params_path=None, feature_selection_method='sfs_forward'):
     # --- 5. Evaluate Model ---
     if X_val is not None and y_val is not None:
         print("\n--- Validation Results ---")
-        y_pred = xgb_reg.predict(X_val)
-        mae = mean_absolute_error(y_val, y_pred)
-        rmse = np.sqrt(mean_squared_error(y_val, y_pred))
-        r2 = r2_score(y_val, y_pred)
+        y_pred_log = xgb_reg.predict(X_val)
+
+        # Inverse transform predictions and actuals to original scale for evaluation
+        y_pred_orig = np.expm1(y_pred_log)
+        y_val_orig = np.expm1(y_val)
+
+        mae = mean_absolute_error(y_val_orig, y_pred_orig)
+        rmse = np.sqrt(mean_squared_error(y_val_orig, y_pred_orig))
+        r2 = r2_score(y_val_orig, y_pred_orig)
+
+        print("Evaluation on original scale:")
         print(f"Mean Absolute Error (MAE): {mae:.2f} kg")
         print(f"Root Mean Squared Error (RMSE): {rmse:.2f} kg")
         print(f"R-squared (R²): {r2:.4f}")
+
+        # Create validation dataframe with prediction errors
+        val_indices = X_val.index
+        df_val_results = df_featured.loc[val_indices].copy()
+        df_val_results['actual_fuel_kg'] = y_val_orig
+        df_val_results['predicted_fuel_kg'] = y_pred_orig
+        df_val_results['prediction_error_kg'] = y_pred_orig - y_val_orig
     else:
         print("\n--- Full Run Training Complete. No validation metrics to display. ---")
 
@@ -504,6 +487,11 @@ def train(params_path=None, feature_selection_method='sfs_forward'):
 
     joblib.dump(xgb_reg, os.path.join(model_dir, "model.joblib"))
     print(f"\nModel saved to {os.path.join(model_dir, 'model.joblib')}")
+
+    if 'df_val_results' in locals():
+        val_results_path = os.path.join(model_dir, "validation_results.csv")
+        df_val_results.to_csv(val_results_path, index=False)
+        print(f"Validation results with prediction errors saved to {val_results_path}")
 
     with open(os.path.join(model_dir, "selected_features.json"), 'w') as f:
         json.dump(selected_features, f)

@@ -29,6 +29,9 @@ rank_flights_path = 'data/prc-2025-datasets/flightlist_rank.parquet'
 final_flights_path = 'data/prc-2025-datasets/flightlist_final.parquet'
 original_apt_file_path = apt_file_path + '.original.parquet'
 HTML_DIR = 'htmlfile'  # Directory to save HTML files for debugging
+GEOMAGTIME= 2025.0
+geo_mag = pygeomag.GeoMag(coefficients_file='wmm/WMMHR_2025.COF', high_resolution=True)
+
 
 # Create HTML directory if it doesn't exist
 os.makedirs(HTML_DIR, exist_ok=True)
@@ -98,9 +101,9 @@ def scrape_airport_data():
         if pd.notna(row['latitude']) and pd.notna(row['longitude']):
             try:
                 elevation_km = row['elevation'] * 0.0003048 if pd.notna(row['elevation']) else 0
-                geo_mag = pygeomag.GeoMag()
-                mag = geo_mag.calculate(glat=row['latitude'], glon=row['longitude'], alt=elevation_km, time=2024.0)
-                mag_declination = mag.decl
+
+                mag = geo_mag.calculate(glat=row['latitude'], glon=row['longitude'], alt=elevation_km, time=GEOMAGTIME)
+                mag_declination = mag.d
                 logging.info(f"  - Calculated Magnetic Declination: {mag_declination:.2f}°")
             except Exception as e:
                 logging.error(f"  - Could not calculate magnetic declination for {icao_code}: {e}")
@@ -406,16 +409,16 @@ def scrape_airport_data():
                         if pd.isna(value):
                             logging.warning(f"    - Missing detail '{detail_key}' for Runway {i} for {icao_code}. Using NA. HTML file: {html_path}")
                     
-                    # Calculate and add true headings
+                    # Calculate true headings and store them directly in HEADING columns
                     true_heading_a = calculate_true_heading(rwy_data_to_use.get('HEADING_a'), mag_declination)
                     true_heading_b = calculate_true_heading(rwy_data_to_use.get('HEADING_b'), mag_declination)
-                    row_update[f'RWY_{i}_TRUE_HEADING_a'] = true_heading_a
-                    row_update[f'RWY_{i}_TRUE_HEADING_b'] = true_heading_b
-                    logging.info(f"    - Calculated True Headings for Runway {i}: {true_heading_a}°, {true_heading_b}°")
+                    row_update[f'RWY_{i}_HEADING_a'] = true_heading_a
+                    row_update[f'RWY_{i}_HEADING_b'] = true_heading_b
+                    logging.info(f"    - Calculated and saved True Headings for Runway {i} into HEADING columns: {true_heading_a}°, {true_heading_b}°")
 
                 else:
                     logging.info(f"  - No data for Runway {i} for {icao_code}. Setting to NA.")
-                    for detail_key in ['LENGTH', 'HEADING_a', 'HEADING_b', 'ELEVATION_a', 'ELEVATION_b', 'TRUE_HEADING_a', 'TRUE_HEADING_b']:
+                    for detail_key in ['LENGTH', 'HEADING_a', 'HEADING_b', 'ELEVATION_a', 'ELEVATION_b']:
                         col_name = f'RWY_{i}_{detail_key}'
                         row_update[col_name] = pd.NA
         else:
@@ -426,7 +429,7 @@ def scrape_airport_data():
             logging.warning(f"  - No runway data found for {icao_code}. All runway columns will be NA. HTML file: {html_path}")
             # Explicitly set all RWY_x_... columns to NA if no runways are found
             for i in range(1, 9):
-                for detail_key in ['LENGTH', 'HEADING_a', 'HEADING_b', 'ELEVATION_a', 'ELEVATION_b', 'TRUE_HEADING_a', 'TRUE_HEADING_b']:
+                for detail_key in ['LENGTH', 'HEADING_a', 'HEADING_b', 'ELEVATION_a', 'ELEVATION_b']:
                     col_name = f'RWY_{i}_{detail_key}'
                     row_update[col_name] = pd.NA
 
@@ -490,7 +493,7 @@ def manual_update_airport(icao_code, data_to_update):
     if icao_code in apt_df.index:
         # First, set all potential runway columns to NA for this ICAO to clear previous data
         for i in range(1, 9):
-            for detail_key in ['LENGTH', 'HEADING_a', 'HEADING_b', 'ELEVATION_a', 'ELEVATION_b', 'TRUE_HEADING_a', 'TRUE_HEADING_b']:
+            for detail_key in ['LENGTH', 'HEADING_a', 'HEADING_b', 'ELEVATION_a', 'ELEVATION_b']:
                 col_name = f'RWY_{i}_{detail_key}'
                 if col_name in apt_df.columns:
                     apt_df.loc[icao_code, col_name] = pd.NA
@@ -502,7 +505,7 @@ def manual_update_airport(icao_code, data_to_update):
             apt_df.loc[icao_code, col] = value
             logging.info(f"  - Updated {col} for {icao_code} with value: {value}")
 
-        # Calculate and add true headings for manual updates
+        # Calculate true headings for manual updates and save into HEADING columns
         for i in range(1, 9):
             mag_heading_a_col = f'RWY_{i}_HEADING_a'
             mag_heading_b_col = f'RWY_{i}_HEADING_b'
@@ -513,9 +516,9 @@ def manual_update_airport(icao_code, data_to_update):
                 true_heading_a = calculate_true_heading(mag_heading_a, mag_declination)
                 true_heading_b = calculate_true_heading(mag_heading_b, mag_declination)
                 
-                apt_df.loc[icao_code, f'RWY_{i}_TRUE_HEADING_a'] = true_heading_a
-                apt_df.loc[icao_code, f'RWY_{i}_TRUE_HEADING_b'] = true_heading_b
-                logging.info(f"  - Manually updated True Headings for Runway {i}: {true_heading_a}°, {true_heading_b}°")
+                apt_df.loc[icao_code, f'RWY_{i}_HEADING_a'] = true_heading_a
+                apt_df.loc[icao_code, f'RWY_{i}_HEADING_b'] = true_heading_b
+                logging.info(f"  - Manually updated HEADING columns with True Headings for Runway {i}: {true_heading_a}°, {true_heading_b}°")
 
     else:
         logging.warning(f"Airport {icao_code} not found in apt.parquet for manual update.")
