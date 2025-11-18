@@ -21,6 +21,8 @@ import seaborn as sns
 import config
 import augment_features
 import introspection
+import correct_date
+import glob
 
 import logging
 
@@ -117,6 +119,13 @@ def prepare_data():
         df_flightlist = pd.read_parquet(os.path.join(config.DATA_DIR, 'prc-2025-datasets/flightlist_train.parquet'))
         df_ac_perf = pd.read_csv(os.path.join(config.RAW_DATA_DIR, 'acPerfOpenAP.csv'))
         df_apt = pd.read_parquet(os.path.join(config.DATA_DIR, 'prc-2025-datasets/apt.parquet'))
+        
+        # Load only necessary columns from trajectories to save memory for date correction
+        trajectory_files = glob.glob(os.path.join(config.INTERPOLATED_TRAJECTORIES_DIR, '**/*.parquet'), recursive=True)
+        logging.info(f"Loading {len(trajectory_files)} trajectory files for date correction (memory optimized)...")
+        req_cols = ['flight_id', 'timestamp', 'latitude', 'longitude', 'altitude']
+        df_trajs = pd.concat([pd.read_parquet(f, columns=req_cols) for f in tqdm(trajectory_files, desc="Loading trajectories")])
+
     except FileNotFoundError as e:
         logging.error(f"Error: Raw data file not found. {e}")
         return
@@ -124,8 +133,12 @@ def prepare_data():
     # --- 2. Preprocess and Merge Data ---
     logging.info("Preprocessing and merging all datasets...")
 
+    # Correct dates on the flight list BEFORE merging with fuel data
+    logging.info("Correcting takeoff and landing times...")
+    df_flightlist_corrected = correct_date.joincdates(df_flightlist, df_apt, df_trajs)
+
     # Merge flight list with aircraft performance data
-    df_merged = pd.merge(df_flightlist, df_ac_perf, left_on='aircraft_type', right_on='ICAO_TYPE_CODE', how='left')
+    df_merged = pd.merge(df_flightlist_corrected, df_ac_perf, left_on='aircraft_type', right_on='ICAO_TYPE_CODE', how='left')
     
     # Merge with fuel data
     df_merged = pd.merge(df_fuel, df_merged, on='flight_id', how='left')

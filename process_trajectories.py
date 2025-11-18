@@ -16,9 +16,9 @@ def process_all_trajectories(smooth: float):
     Args:
         smooth (float): The smoothing factor for the interpolation.
     """
-    input_base_dir = os.path.join(config.DATA_DIR, 'prc-2025-datasets')
+    input_base_dir = os.path.join(config.DATA_DIR, 'filtered_trajectories')
     output_base_dir = config.INTERPOLATED_TRAJECTORIES_DIR
-    sub_dirs = ['flights_train', 'flights_rank']
+    sub_dirs = ['flights_train', 'flights_rank', 'flights_final']
 
     for sub_dir in sub_dirs:
         input_dir = os.path.join(input_base_dir, sub_dir)
