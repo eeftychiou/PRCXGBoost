@@ -18,6 +18,7 @@ This project aims to build a Machine Learning model to predict fuel consumption 
 - **`filter_trajs.py`**: Script for filtering erroneous measurements from trajectory files.
 - **`interpolate.py`**: Module for interpolating missing values in trajectory files.
 - **`correct_date.py`**: Module for correcting takeoff and landing times using trajectory data.
+- **`impute_apt.py`**: Enriches airport data by scraping information from SkyVector and calculating true runway headings.
 - **`feature_engineering.py`**: Script for creating new features from raw and trajectory data.
 - **`train_*.py`**: Scripts for training different models (e.g., `train_gbr.py`, `train_xgb.py`).
 - **`create_submission.py`**: Script to generate the final submission file.
@@ -32,7 +33,7 @@ The ML pipeline is managed by `run_pipeline.py` and consists of the following st
 1.  **`profile_data`**: Analyzes the input data to generate a profile report.
 2.  **`filter_trajectories`**: Filters raw trajectory files to remove erroneous data points and saves the cleaned files to `data/filtered_trajectories`.
 3.  **`interpolate_trajectories`**: Processes the *filtered* trajectory files, interpolates missing values (e.g., CAS, TAS, altitude, groundspeed, etc.) per flight, and saves the processed files to `data/interpolated_trajectories`.
-4.  **`prepare_data`**: Preprocesses the raw data, corrects takeoff and landing times using trajectory data, handles missing values (from non-trajectory data), and creates features. This stage now uses the *interpolated* trajectory data. The processed data is saved in the `data/processed` directory.
+4.  **`prepare_data`**: Preprocesses the raw data for the `train`, `rank`, and `final` datasets in a single run. It corrects takeoff and landing times using a memory-efficient, sequential processing of trajectory data, handles missing values, and creates features. The processed data is saved in the `data/processed` directory.
 5.  **`train`**: Trains a machine learning model. The following models are supported:
     - Gradient Boosting Regressor (`gbr`)
     - XGBoost Regressor (`xgb`)
@@ -72,5 +73,5 @@ python run_pipeline.py train --model xgb
 
 The `config.py` file contains important configuration variables:
 
-- **`TEST_RUN`**: Set to `True` to run the pipeline on a small fraction of the data for testing purposes.
+- **`TEST_RUN`**: Set to `True` to run the pipeline on a small fraction of the data for testing purposes. When enabled, the `prepare_data` stage samples the flight list at the beginning to significantly speed up runtime for faster evaluation.
 - **`TEST_RUN_FRACTION`**: The fraction of data to use when `TEST_RUN` is `True`.

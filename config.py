@@ -21,8 +21,8 @@ METARS_DIR = os.path.join(DATA_DIR, "metars")
 INTERPOLATED_TRAJECTORIES_DIR = os.path.join(DATA_DIR, "interpolated_trajectories")
 
 # --- Data Preparation ---
-TEST_RUN = False
-TEST_RUN_FRACTION = 0.1  # Use a fraction of the data for test runs
+TEST_RUN = True
+TEST_RUN_FRACTION = 0.05  # Use a fraction of the data for test runs
 
 
 # Min-Max Scaler Bounds for PINN inputs

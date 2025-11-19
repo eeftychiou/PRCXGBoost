@@ -2,56 +2,105 @@ import warnings
 import pitot.geodesy
 import utils
 import pandas as pd
+import os
+from tqdm import tqdm
+import numpy as np
 
-def joincdates(flights,airports,trajs,rod=-1000,roc=1000):
+def joincdates(flights, airports, trajectories_dir, rod=-1000, roc=1000):
     ''' Compute corrected dates and fill with original dates if cannot be corrected '''
-    cdates=fillnadates(flights,compute_dates(flights,airports,trajs,rod=rod,roc=roc))
-    flights =flights.join(cdates.set_index("flight_id"),on="flight_id",how="inner")
-    return flights
+    cdates = compute_dates(flights, airports, trajectories_dir, rod=rod, roc=roc)
+    cdates = fillnadates(flights, cdates)
+    
+    # Join the corrected dates
+    flights_corrected = flights.join(cdates.set_index("flight_id"), on="flight_id", how="inner")
+    
+    # Rename columns to the desired output format
+    flights_corrected = flights_corrected.rename(columns={
+        "takeoff": "takeoff_o",
+        "landed": "landed_o",
+        "t_adep": "takeoff",
+        "t_ades": "landed"
+    })
+    
+    return flights_corrected
 
-def compute_dates(flights,airports,trajs,rod=-1000,roc=1000):
-    ''' Compute corrected dates'''
-    # Rename airport columns to match expected names
+def compute_dates(flights, airports, trajectories_dir, rod=-1000, roc=1000):
+    ''' Compute corrected dates by processing trajectories one by one '''
     airports = airports.rename(columns={"icao": "icao_code", "latitude": "latitude_deg", "longitude": "longitude_deg"})
     
-    # Rename flight columns to match expected names
-    flights_renamed = flights.rename(columns={"origin_icao": "adep", "destination_icao": "ades"})
+    results = []
 
-    dfjoined = trajs.join(
-        flights_renamed.set_index("flight_id"),
-        on="flight_id",
-        how="inner",
-        validate="many_to_one")
-    res = dfjoined[["flight_id"]].drop_duplicates()
-    for apt in ["adep","ades"]:
-        adf = dfjoined.join(
-            airports[["icao_code","latitude_deg","longitude_deg"]].set_index("icao_code"),
-            on=apt,
-            how="left").reset_index()
-        adf[f"distance_{apt}"] = pitot.geodesy.distance(
-            adf.latitude,
-            adf.longitude,
-            adf.latitude_deg,
-            adf.longitude_deg)/utils.NM2METER
-        mindist = adf.query(f"distance_{apt}<10").groupby("flight_id")
-        idxdistmin = mindist["timestamp"].idxmin() if apt == "ades" else mindist["timestamp"].idxmax()
-        xtime=adf.loc[idxdistmin,["flight_id","timestamp","altitude"]]
-        rocd = rod if apt =="ades" else roc
-        timedelta = ((xtime.altitude/rocd*60)*1e9).round() # nanosecond rounding
-        # feed timedelta as nanoseconds, otherwise,
-        # random overflow error from one run to another on the exact same data with the exact same code...
-        with warnings.catch_warnings():
-            warnings.simplefilter("error")
-            xtime["timestamp"]=xtime["timestamp"]-pd.to_timedelta(timedelta,unit="nanoseconds")
-        x = xtime[["flight_id","timestamp"]].rename(columns={"timestamp":f"t_{apt}"}).set_index("flight_id")
-        res = res.join(x,on="flight_id",how="left")
-    return res
+    for _, flight_info in tqdm(flights.iterrows(), total=flights.shape[0], desc="Correcting Dates"):
+        flight_id = flight_info['flight_id']
+        
+        traj_path = os.path.join(trajectories_dir, f"{flight_id}.parquet")
+        
+        if not os.path.exists(traj_path):
+            warnings.warn(f"Trajectory file not found for flight_id: {flight_id}")
+            continue
 
-def fillnadates(flights,cdates):
+        try:
+            df_traj = pd.read_parquet(traj_path, columns=['timestamp', 'latitude', 'longitude', 'altitude'])
+        except Exception as e:
+            warnings.warn(f"Could not read trajectory for {flight_id}: {e}")
+            continue
+
+        flight_result = {"flight_id": flight_id}
+
+        for apt_type, icao_code in [("adep", flight_info["origin_icao"]), ("ades", flight_info["destination_icao"])]:
+            airport_info = airports[airports['icao_code'] == icao_code]
+            if airport_info.empty:
+                flight_result[f"t_{apt_type}"] = pd.NaT
+                continue
+
+            lat_deg = airport_info.iloc[0]['latitude_deg']
+            lon_deg = airport_info.iloc[0]['longitude_deg']
+
+            num_points = len(df_traj)
+            lat_array = np.full(num_points, lat_deg)
+            lon_array = np.full(num_points, lon_deg)
+
+            df_traj[f"distance_{apt_type}"] = pitot.geodesy.distance(
+                df_traj.latitude.to_numpy(),
+                df_traj.longitude.to_numpy(),
+                lat_array,
+                lon_array) / utils.NM2METER
+            
+            mindist = df_traj.query(f"distance_{apt_type}<10")
+            if mindist.empty:
+                flight_result[f"t_{apt_type}"] = pd.NaT
+                continue
+
+            idxdistmin = mindist["timestamp"].idxmin() if apt_type == "ades" else mindist["timestamp"].idxmax()
+            
+            xtime = df_traj.loc[idxdistmin, ["timestamp", "altitude"]]
+            rocd = rod if apt_type == "ades" else roc
+            
+            try:
+                timedelta_ns = ((xtime.altitude / rocd * 60) * 1e9).round()
+                corrected_time = xtime["timestamp"] - pd.to_timedelta(timedelta_ns, unit="ns")
+                flight_result[f"t_{apt_type}"] = corrected_time
+            except (ValueError, OverflowError, pd.errors.OutOfBoundsDatetime) as e:
+                warnings.warn(f"Could not correct date for {flight_id} ({apt_type}) due to: {e}")
+                flight_result[f"t_{apt_type}"] = pd.NaT
+
+        results.append(flight_result)
+
+    return pd.DataFrame(results)
+
+def fillnadates(flights, cdates):
     ''' fill with original dates if cannot be corrected '''
-    # Use 'takeoff' and 'landed' from the current flightlist schema
     df = flights.rename(columns={"takeoff": "t_adep", "landed": "t_ades"})
     df = df[["flight_id", "t_adep", "t_ades"]]
     
-    df = df.set_index("flight_id").loc[cdates.flight_id]
-    return cdates.set_index("flight_id").combine_first(df).reset_index()
+    df = df.set_index("flight_id")
+    cdates = cdates.set_index("flight_id")
+    
+    df['t_adep'] = pd.to_datetime(df['t_adep'])
+    df['t_ades'] = pd.to_datetime(df['t_ades'])
+    cdates['t_adep'] = pd.to_datetime(cdates['t_adep'])
+    cdates['t_ades'] = pd.to_datetime(cdates['t_ades'])
+
+    combined_df = cdates.combine_first(df).reset_index()
+    
+    return combined_df
