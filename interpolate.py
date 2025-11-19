@@ -134,6 +134,10 @@ def process_all_trajectories(smooth: float):
             
             if "level_1" in df_interpolated.columns:
                 df_interpolated = df_interpolated.drop(columns="level_1")
+            
+            # Rename 'track_unwrapped' back to 'track'
+            if 'track_unwrapped' in df_interpolated.columns:
+                df_interpolated = df_interpolated.rename(columns={'track_unwrapped': 'track'})
 
             df_interpolated.to_parquet(output_file_path, index=False)
 
