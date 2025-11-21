@@ -4,6 +4,7 @@ Main entry point for the ML pipeline.
 This script allows you to run the different stages of the pipeline:
 - `profile_data`: Performs a deep analysis of all data sources.
 - `interpolate_trajectories`: Interpolates missing values in trajectory files.
+- `prepare_metars`: Pre-processes raw METAR data into a clean dataset.
 - `prepare_data`: Preprocesses the raw data and creates introspection files.
 - `train`: Trains a model on the processed data.
 - `predict`: Creates the submission file using a trained model.
@@ -23,12 +24,13 @@ import tune_model
 import trajectory_interpolation # Import the new module
 import os # For path manipulation
 import config # Import the config module
+import metar_utils
 
 def main():
     parser = argparse.ArgumentParser(description="Run the ML pipeline.")
     
     # Main pipeline stages
-    parser.add_argument("stage", choices=["profile_data", "interpolate_trajectories", "prepare_data", "train", "predict", "evaluate", "tune"], help="The pipeline stage to run.")
+    parser.add_argument("stage", choices=["profile_data", "interpolate_trajectories", "prepare_metars", "prepare_data", "train", "predict", "evaluate", "tune"], help="The pipeline stage to run.")
     
     # Model selection for the training and tuning stages
     parser.add_argument("--model", choices=["gbr", "xgb", "rf"], default="gbr", help="The model to train or tune. Only used for the 'train' and 'tune' stages.")
@@ -52,6 +54,8 @@ def main():
         print("--- Running Trajectory Interpolation ---")
         trajectory_interpolation.interpolate_trajectories(test_mode=args.test_interpolation)
         print(f"Interpolated trajectories saved to: {config.INTERPOLATED_TRAJECTORIES_DIR}")
+    elif args.stage == "prepare_metars":
+        metar_utils.process_metar_data()
     elif args.stage == "prepare_data":
         data_preparation.prepare_data()
     elif args.stage == "train":

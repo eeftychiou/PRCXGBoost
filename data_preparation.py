@@ -23,6 +23,7 @@ import augment_features
 import introspection
 import correct_date
 import glob
+import metar_utils
 
 import logging
 
@@ -109,6 +110,16 @@ def prepare_data():
     It processes 'train', 'rank', and 'final' datasets.
     """
     logging.info("--- Starting Data Preparation Stage ---")
+    
+    # Load the newly processed METAR data
+    metar_path = os.path.join(config.PROCESSED_DATA_DIR, 'processed_metars.parquet')
+    try:
+        df_metar = pd.read_parquet(metar_path)
+        df_metar['timestamp'] = pd.to_datetime(df_metar['timestamp'])
+        logging.info(f"Successfully loaded processed METAR data from {metar_path}")
+    except FileNotFoundError:
+        logging.error(f"Processed METAR file not found at {metar_path}. Weather features will not be added. Please run the 'prepare_metars' stage first.")
+        df_metar = None
 
     dataset_types = ['train', 'rank', 'final']
 
@@ -173,6 +184,21 @@ def prepare_data():
         df_merged.reset_index(drop=True, inplace=True)
 
         logging.info(f"Load and Merged {dataset_type}. Dataset has {df_merged.shape[0]} rows and {df_merged.shape[1]} columns")
+        
+        # --- 3. Merge Weather Data ---
+        if df_metar is not None:
+            logging.info("Merging weather data...")
+            # Departure weather
+            df_merged = pd.merge_asof(df_merged.sort_values('takeoff'), 
+                                      df_metar.add_prefix('dep_').rename(columns={'dep_ICAO_ID': 'origin_icao', 'dep_timestamp': 'takeoff'}),
+                                      on='takeoff', left_on='origin_icao', right_on='origin_icao',
+                                      direction='nearest', tolerance=pd.Timedelta(hours=1))
+            # Arrival weather
+            df_merged = pd.merge_asof(df_merged.sort_values('landed'),
+                                      df_metar.add_prefix('arr_').rename(columns={'arr_ICAO_ID': 'destination_icao', 'arr_timestamp': 'landed'}),
+                                      on='landed', left_on='destination_icao', right_on='destination_icao',
+                                      direction='nearest', tolerance=pd.Timedelta(hours=1))
+            logging.info("Weather data merged.")
         
         df_to_process = df_merged
 
