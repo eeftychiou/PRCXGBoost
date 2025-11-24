@@ -4,6 +4,26 @@ import numpy as np
 from pathlib import Path
 from tqdm import tqdm
 import config
+import re
+
+# Comprehensive dictionary for decoding METAR weather phenomena
+WX_CODES_DECODED = {
+    # Intensity
+    '-': 'Light', '+': 'Heavy', 'VC': 'In Vicinity',
+    # Descriptor
+    'MI': 'Shallow', 'PR': 'Partial', 'BC': 'Patches', 'DR': 'Low Drifting',
+    'BL': 'Blowing', 'SH': 'Showers', 'TS': 'Thunderstorm', 'FZ': 'Freezing',
+    # Precipitation
+    'DZ': 'Drizzle', 'RA': 'Rain', 'SN': 'Snow', 'SG': 'Snow Grains',
+    'IC': 'Ice Crystals', 'PL': 'Ice Pellets', 'GR': 'Hail', 'GS': 'Small Hail/Snow Pellets',
+    'UP': 'Unknown Precipitation',
+    # Obscuration
+    'BR': 'Mist', 'FG': 'Fog', 'FU': 'Smoke', 'VA': 'Volcanic Ash',
+    'DU': 'Widespread Dust', 'SA': 'Sand', 'HZ': 'Haze',
+    # Other
+    'PO': 'Well-Developed Dust/Sand Whirls', 'SQ': 'Squalls', 'FC': 'Funnel Cloud',
+    'SS': 'Sandstorm', 'DS': 'Duststorm'
+}
 
 def haversine_vectorized(lat1, lon1, lat2, lon2):
     """
@@ -19,7 +39,6 @@ def haversine_vectorized(lat1, lon1, lat2, lon2):
     a = np.sin(dlat / 2.0)**2 + np.cos(lat1_rad) * np.cos(lat2_rad) * np.sin(dlon / 2.0)**2
     c = 2 * np.arctan2(np.sqrt(a), np.sqrt(1 - a))
     
-    # Ensure index is preserved
     if isinstance(lat2, pd.Series):
         return pd.Series(R * c, index=lat2.index)
     return R * c
@@ -38,145 +57,158 @@ def load_raw_metars(metar_dir=config.METARS_DIR):
     metar_df['valid'] = pd.to_datetime(metar_df['valid'])
     metar_df.rename(columns={'station': 'ICAO_ID'}, inplace=True)
     
-    # Drop records with missing essential data
     metar_df.dropna(subset=['ICAO_ID', 'lat', 'lon', 'valid'], inplace=True)
     
-    # Sort and set index for efficient lookup
     metar_df.sort_values(['ICAO_ID', 'valid'], inplace=True)
     metar_df.set_index(['ICAO_ID', 'valid'], inplace=True)
-    print(f"Loaded {len(metar_df)} METAR records from {len(metar_files)} files.")
+    
+    if not metar_df.index.is_unique:
+        num_duplicates = metar_df.index.duplicated().sum()
+        print(f"DEBUG LOG: Found {num_duplicates} duplicate station-time records in raw METAR files. Keeping the first entry for each.")
+        metar_df = metar_df[~metar_df.index.duplicated(keep='first')]
+
+    print(f"Loaded {len(metar_df)} unique METAR records from {len(metar_files)} files.")
     return metar_df
+
+def decode_wxcodes(df):
+    """
+    Decodes the 'wxcodes' column into human-readable and binary features.
+    """
+    if 'wxcodes' not in df.columns:
+        return df
+
+    df['wxcodes'] = df['wxcodes'].fillna('NSW') # No Significant Weather
+    
+    df['wx_is_thunderstorm'] = df['wxcodes'].str.contains('TS').astype(int)
+    df['wx_is_freezing'] = df['wxcodes'].str.contains('FZ').astype(int)
+    df['wx_is_shower'] = df['wxcodes'].str.contains('SH').astype(int)
+    df['wx_is_rain'] = df['wxcodes'].str.contains('RA').astype(int)
+    df['wx_is_snow'] = df['wxcodes'].str.contains('SN').astype(int)
+    df['wx_is_fog_mist'] = df['wxcodes'].str.contains('FG|BR').astype(int)
+    df['wx_is_haze_smoke'] = df['wxcodes'].str.contains('HZ|FU').astype(int)
+
+    df['wx_intensity'] = 0 # Default to normal
+    df.loc[df['wxcodes'].str.startswith('-'), 'wx_intensity'] = 1 # Light
+    df.loc[df['wxcodes'].str.startswith('+'), 'wx_intensity'] = 2 # Heavy
+
+    return df
+
+def get_weather_for_events(events, metar_df, nearest_station_map, event_type):
+    """
+    Generic function to fetch weather for flight events (departure or arrival).
+    """
+    print(f"Retrieving weather for {len(events)} {event_type} events...")
+    processed_records = []
+    
+    events['station_to_use'] = events[f'{event_type}_icao'].map(nearest_station_map)
+    events.dropna(subset=['station_to_use'], inplace=True)
+
+    for _, event in tqdm(events.iterrows(), total=len(events), desc=f"Fetching {event_type} weather"):
+        station_id = event['station_to_use']
+        request_time = event[f'{event_type}_time']
+        
+        try:
+            station_weather = metar_df.loc[station_id]
+            if not station_weather.index.is_unique:
+                station_weather = station_weather[~station_weather.index.duplicated(keep='first')]
+
+            pos = station_weather.index.get_indexer([request_time], method='pad')[0]
+            if pos == -1:
+                continue
+
+            weather_data = station_weather.iloc[[pos]].reset_index(drop=True)
+            weather_data['flight_id'] = event['flight_id']
+            processed_records.append(weather_data)
+        except (KeyError, IndexError):
+            continue
+            
+    if not processed_records:
+        return pd.DataFrame()
+
+    df_weather = pd.concat(processed_records, ignore_index=True)
+    
+    # Feature Engineering
+    df_weather = decode_wxcodes(df_weather)
+    
+    # Select and clean columns
+    id_cols = ['flight_id']
+    cols_to_exclude = ['valid', 'lon', 'lat', 'wxcodes', 'metar', 'peak_wind_time', 'ICAO_ID']
+    feature_cols = [col for col in df_weather.columns if col not in cols_to_exclude + id_cols]
+    
+    df_final = df_weather[id_cols + feature_cols].copy()
+
+    for col in feature_cols:
+        if pd.api.types.is_numeric_dtype(df_final[col]):
+            if df_final[col].isnull().any():
+                median_val = df_final[col].median()
+                if pd.isna(median_val):
+                    df_final[col].fillna(0, inplace=True)
+                else:
+                    df_final[col].fillna(median_val, inplace=True)
+    
+    return df_final.add_prefix(f'{event_type}_').rename(columns={f'{event_type}_flight_id': 'flight_id'})
+
 
 def process_metar_data():
     """
-    Pre-processes raw METAR data to create a clean, feature-engineered dataset
-    aligned with the flight data from the processed directory.
+    Pre-processes raw METAR data, creating a single file with weather features
+    for both departure and arrival, keyed by flight_id.
     """
-    print("--- Starting METAR Pre-processing ---")
+    print("--- Starting METAR Pre-processing (keyed by flight_id) ---")
 
-    # 1. Load all *featured* flight data to get corrected timestamps
-    print("Loading featured flight data from processed directory...")
+    # 1. Load flight and airport data
+    print("Loading corrected flightlist and airport data...")
     all_flights = []
-    test_suffix = '_test' if config.TEST_RUN else ''
     for dataset_type in ['train', 'rank', 'final']:
-        featured_path = os.path.join(config.PROCESSED_DATA_DIR, f"featured_data_{dataset_type}{test_suffix}.parquet")
-        try:
-            df_featured = pd.read_parquet(featured_path)
-            all_flights.append(df_featured)
-        except FileNotFoundError:
-            raise FileNotFoundError(
-                f"Featured data file not found at {featured_path}. "
-                "Please run the 'prepare_data' stage at least once before running 'prepare_metars'."
-            )
+        flightlist_path = os.path.join(config.PROCESSED_DATA_DIR, f"corrected_flightlist_{dataset_type}.parquet")
+        if not os.path.exists(flightlist_path):
+            raise FileNotFoundError(f"Corrected flightlist not found at {flightlist_path}. Run 'correct_timestamps' first.")
+        all_flights.append(pd.read_parquet(flightlist_path))
     
     df_flights = pd.concat(all_flights, ignore_index=True)
-    # Ensure datetime types
-    df_flights['takeoff'] = pd.to_datetime(df_flights['takeoff'])
-    df_flights['landed'] = pd.to_datetime(df_flights['landed'])
+    df_apt = pd.read_parquet(os.path.join(config.DATA_DIR, 'prc-2025-datasets/apt.parquet'))
+    
+    df_flights = pd.merge(df_flights, df_apt[['icao', 'latitude', 'longitude']].add_prefix('origin_'), on='origin_icao', how='left')
+    df_flights = pd.merge(df_flights, df_apt[['icao', 'latitude', 'longitude']].add_prefix('destination_'), on='destination_icao', how='left')
 
-    # Get unique airports with their coordinates
-    origin_airports = df_flights[['origin_icao', 'origin_latitude', 'origin_longitude']].rename(columns={'origin_icao': 'ICAO_ID', 'origin_latitude': 'lat', 'origin_longitude': 'lon'})
-    dest_airports = df_flights[['destination_icao', 'destination_latitude', 'destination_longitude']].rename(columns={'destination_icao': 'ICAO_ID', 'destination_latitude': 'lat', 'destination_longitude': 'lon'})
-    flight_airports = pd.concat([origin_airports, dest_airports]).drop_duplicates(subset='ICAO_ID').dropna(subset=['ICAO_ID', 'lat', 'lon']).set_index('ICAO_ID')
-
-    # 2. Load Raw METARs
+    # 2. Load METARs and map stations
     metar_df = load_raw_metars()
     metar_locations = metar_df.reset_index()[['ICAO_ID', 'lat', 'lon']].drop_duplicates(subset='ICAO_ID').set_index('ICAO_ID')
-
-    # 3. Map Flight Airports to Nearest METAR Stations
-    print("Mapping flight airports to nearest METAR stations (within 100nm)...")
-    nearest_station_map = {}
-    for icao, row in tqdm(flight_airports.iterrows(), total=len(flight_airports)):
-        if icao in metar_locations.index:
-            nearest_station_map[icao] = icao
-            continue
-
-        distances_km = haversine_vectorized(row['lat'], row['lon'], metar_locations['lat'], metar_locations['lon'])
-        distances_nm = distances_km * 0.539957  # Convert to nautical miles
-
-        valid_distances = distances_nm[distances_nm <= 100]
-        if not valid_distances.empty:
-            nearest_station_map[icao] = valid_distances.idxmin()
-        else:
-            nearest_station_map[icao] = None
     
-    # 4. Create a list of required weather lookups
-    dep_requests = df_flights[['origin_icao', 'takeoff']].rename(columns={'origin_icao': 'ICAO_ID', 'takeoff': 'time'})
-    arr_requests = df_flights[['destination_icao', 'landed']].rename(columns={'destination_icao': 'ICAO_ID', 'landed': 'time'})
-    weather_requests = pd.concat([dep_requests, arr_requests]).drop_duplicates().dropna()
-    weather_requests = weather_requests[weather_requests['ICAO_ID'].isin(nearest_station_map.keys())]
+    flight_airports = pd.concat([
+        df_flights[['origin_icao', 'origin_latitude', 'origin_longitude']].rename(columns={'origin_icao': 'ICAO_ID', 'origin_latitude': 'lat', 'origin_longitude': 'lon'}),
+        df_flights[['destination_icao', 'destination_latitude', 'destination_longitude']].rename(columns={'destination_icao': 'ICAO_ID', 'destination_latitude': 'lat', 'destination_longitude': 'lon'})
+    ]).drop_duplicates(subset='ICAO_ID').dropna().set_index('ICAO_ID')
 
-    # 5. Retrieve and process weather data
-    print(f"Retrieving weather for {len(weather_requests)} unique airport-time requests...")
-    processed_records = []
-    for _, request in tqdm(weather_requests.iterrows(), total=len(weather_requests)):
-        station_to_use = nearest_station_map.get(request['ICAO_ID'])
-        if not station_to_use:
-            continue
-        
-        try:
-            station_weather = metar_df.loc[station_to_use]
-            # Find the single closest report in time
-            nearest_idx = station_weather.index.get_loc(request['time'], method='nearest')
-            weather_data = station_weather.iloc[[nearest_idx]].reset_index() # Keep as DataFrame
-            
-            # Add original request info
-            weather_data['requested_icao'] = request['ICAO_ID']
-            weather_data['requested_time'] = request['time']
-            processed_records.append(weather_data)
-        except (KeyError, IndexError):
-            continue # No data for this station
+    print("Mapping flight airports to nearest METAR stations...")
+    nearest_station_map = {icao: (icao if icao in metar_locations.index else None) for icao in flight_airports.index}
+    unmapped_airports = [icao for icao, station in nearest_station_map.items() if station is None]
+    
+    if unmapped_airports:
+        unmapped_df = flight_airports.loc[unmapped_airports]
+        for icao, row in tqdm(unmapped_df.iterrows(), total=len(unmapped_df), desc="Finding nearby stations"):
+            distances_nm = haversine_vectorized(row['lat'], row['lon'], metar_locations['lat'], metar_locations['lon']) * 0.539957
+            valid_distances = distances_nm[distances_nm <= 100]
+            if not valid_distances.empty:
+                nearest_station_map[icao] = valid_distances.idxmin()
 
-    if not processed_records:
-        print("No weather data could be processed. Aborting.")
+    # 3. Process Departure and Arrival Weather Separately
+    dep_events = df_flights[['flight_id', 'origin_icao', 'takeoff']].rename(columns={'origin_icao': 'dep_icao', 'takeoff': 'dep_time'})
+    arr_events = df_flights[['flight_id', 'destination_icao', 'landed']].rename(columns={'destination_icao': 'arr_icao', 'landed': 'arr_time'})
+
+    df_dep_weather = get_weather_for_events(dep_events, metar_df, nearest_station_map, 'dep')
+    df_arr_weather = get_weather_for_events(arr_events, metar_df, nearest_station_map, 'arr')
+
+    # 4. Merge and Save
+    if df_dep_weather.empty or df_arr_weather.empty:
+        print("Could not process weather for departures or arrivals. Aborting.")
         return
+        
+    df_final_weather = pd.merge(df_dep_weather, df_arr_weather, on='flight_id', how='outer')
 
-    df_processed = pd.concat(processed_records, ignore_index=True)
-
-    # 6. Feature Engineering & Encoding
-    print("Encoding categorical weather features...")
-    
-    # Sky Condition: Map to ordinal values
-    sky_conditions = ['SKC', 'FEW', 'SCT', 'BKN', 'OVC', 'VV']
-    sky_map = {val: i for i, val in enumerate(sky_conditions)}
-    for col in ['skyc1', 'skyc2', 'skyc3', 'skyc4']:
-        if col in df_processed.columns:
-            df_processed[col] = df_processed[col].map(sky_map)
-
-    # Weather Codes (wxcodes): One-hot encode common phenomena
-    if 'wxcodes' in df_processed.columns:
-        df_processed['wxcodes'] = df_processed['wxcodes'].fillna('')
-        common_wx = ['RA', 'SN', 'FG', 'BR', 'HZ', 'TS', 'SH', 'FZ']
-        for wx in common_wx:
-            df_processed[f'wx_{wx}'] = df_processed['wxcodes'].str.contains(wx).astype(int)
-
-    # 7. Select, Clean, and Save
-    numeric_features = ['tmpf', 'dwpf', 'relh', 'drct', 'sknt', 'p01i', 'alti', 'mslp', 'vsby', 'gust', 'ice_accretion_1hr']
-    sky_features = ['skyl1', 'skyl2', 'skyl3', 'skyl4', 'skyc1', 'skyc2', 'skyc3', 'skyc4']
-    wx_features = [col for col in df_processed.columns if col.startswith('wx_')]
-    
-    final_cols = ['requested_icao', 'requested_time'] + \
-                 [col for col in numeric_features if col in df_processed.columns] + \
-                 [col for col in sky_features if col in df_processed.columns] + \
-                 wx_features
-    
-    df_final = df_processed[final_cols].copy()
-
-    # Impute missing numeric values with the median
-    for col in numeric_features:
-        if col in df_final.columns and df_final[col].isnull().any():
-            median_val = df_final[col].median()
-            df_final[col].fillna(median_val, inplace=True)
-            print(f"Imputed missing values in '{col}' with median: {median_val:.2f}")
-
-    # Rename for merging
-    df_final.rename(columns={'requested_icao': 'ICAO_ID', 'requested_time': 'timestamp'}, inplace=True)
-
-    # Save the processed data
     output_path = os.path.join(config.PROCESSED_DATA_DIR, 'processed_metars.parquet')
-    df_final.to_parquet(output_path, index=False)
-    print(f"--- METAR Pre-processing Complete. Saved to {output_path} ---")
+    df_final_weather.to_parquet(output_path, index=False)
+    print(f"--- METAR Pre-processing Complete. Saved flight-keyed weather data to {output_path} ---")
 
 if __name__ == '__main__':
-    # This allows running the processing independently
     process_metar_data()

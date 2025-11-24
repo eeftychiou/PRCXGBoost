@@ -7,9 +7,8 @@ It performs the following steps:
 3.  If in test mode, it samples a fraction of the data.
 4.  Applies the full feature engineering pipeline.
 5.  Drops columns with high missing values.
-6.  Imputes remaining missing values.
-7.  Generates comprehensive introspection files.
-8.  Saves the final feature-rich DataFrame for the training stage.
+6.  Generates comprehensive introspection files.
+7.  Saves the final feature-rich DataFrame for the training stage.
 """
 import os
 import pandas as pd
@@ -28,7 +27,9 @@ import metar_utils
 import logging
 
 # --- Setup Logging ---
-log_file = 'data_preparation.log'
+# Create logs directory if it doesn't exist
+os.makedirs('logs', exist_ok=True)
+log_file = os.path.join('logs', 'data_preparation.log')
 logging.basicConfig(level=logging.INFO,
                      format='%(asctime)s - %(levelname)s - %(message)s',
                      handlers=[
@@ -38,7 +39,6 @@ logging.basicConfig(level=logging.INFO,
 
 def _get_columns_to_drop():
     """Returns a list of columns to drop based on high missing values and low correlation."""
-    # This list is derived from data_preparation_missing_values.csv and target correlation
     return [
         'engine_options_A319-113', 'engine_options_A319-114', 'engine_options_A319-111', 'engine_options_A319-112',
         'engine_options_A319-132',
@@ -96,29 +96,54 @@ def _get_columns_to_drop():
         'origin_RWY_1_ELEVATION_b',
         'origin_RWY_5_ELEVATION_b',
         'origin_RWY_5_ELEVATION_a',
-        # Added based on 20251111-182738 after-imputation introspection (extremely high missing)
         'phase_fraction_unknown',
-        # High missing rate among engineered trajectory dispersion features
         'alt_diff_rev_std'
     ]
+
+def correct_timestamps_for_all():
+    """
+    Corrects takeoff and landing times for all datasets ('train', 'rank', 'final')
+    and saves them to intermediate files. This is the new first step.
+    """
+    logging.info("--- Starting Timestamp Correction Stage ---")
+    dataset_types = ['train', 'rank', 'final']
+    df_apt = pd.read_parquet(os.path.join(config.DATA_DIR, 'prc-2025-datasets/apt.parquet'))
+
+    for dataset_type in dataset_types:
+        logging.info(f"Correcting timestamps for {dataset_type.upper()} dataset...")
+        
+        flightlist_path = os.path.join(config.DATA_DIR, f'prc-2025-datasets/flightlist_{dataset_type}.parquet')
+        df_flightlist = pd.read_parquet(flightlist_path)
+        
+        trajectories_dir = os.path.join(config.INTERPOLATED_TRAJECTORIES_DIR, f'flights_{dataset_type}')
+        if not os.path.exists(trajectories_dir):
+            logging.error(f"Trajectory directory not found for {dataset_type}: {trajectories_dir}. Skipping.")
+            continue
+            
+        df_flightlist_corrected = correct_date.joincdates(df_flightlist, df_apt, trajectories_dir)
+        
+        output_filename = f"corrected_flightlist_{dataset_type}.parquet"
+        output_path = os.path.join(config.PROCESSED_DATA_DIR, output_filename)
+        df_flightlist_corrected.to_parquet(output_path, index=False)
+        logging.info(f"Saved corrected flightlist for {dataset_type} to {output_path}")
+        
+    logging.info("--- Timestamp Correction Stage Complete ---")
+
 
 def prepare_data():
     """
     Loads, preprocesses, and saves the data for the pipeline.
-    This function now expects trajectory files to be pre-interpolated
-    and located in the 'data/interpolated_trajectories' directory.
-    It processes 'train', 'rank', and 'final' datasets.
+    This function now starts from the corrected flightlists and uses a flight-keyed weather file.
     """
-    logging.info("--- Starting Data Preparation Stage ---")
+    logging.info("--- Starting Data Preparation Stage (Single Run) ---")
     
-    # Load the newly processed METAR data
     metar_path = os.path.join(config.PROCESSED_DATA_DIR, 'processed_metars.parquet')
+    
     try:
         df_metar = pd.read_parquet(metar_path)
-        df_metar['timestamp'] = pd.to_datetime(df_metar['timestamp'])
         logging.info(f"Successfully loaded processed METAR data from {metar_path}")
     except FileNotFoundError:
-        logging.error(f"Processed METAR file not found at {metar_path}. Weather features will not be added. Please run the 'prepare_metars' stage first.")
+        logging.warning(f"Processed METAR file not found at {metar_path}. Weather features will not be added. If this is unexpected, please run the 'prepare_metars' stage first.")
         df_metar = None
 
     dataset_types = ['train', 'rank', 'final']
@@ -126,78 +151,48 @@ def prepare_data():
     for dataset_type in dataset_types:
         logging.info(f"--- Processing {dataset_type.upper()} Dataset ---")
 
-        # --- 1. Load Data ---
-        logging.info(f"Loading raw data for {dataset_type}...")
+        # --- 1. Load Corrected and Raw Data ---
+        logging.info(f"Loading data for {dataset_type}...")
 
         try:
-            flightlist_path = os.path.join(config.DATA_DIR, f'prc-2025-datasets/flightlist_{dataset_type}.parquet')
-            df_flightlist = pd.read_parquet(flightlist_path)
+            corrected_flightlist_path = os.path.join(config.PROCESSED_DATA_DIR, f'corrected_flightlist_{dataset_type}.parquet')
+            df_flightlist_corrected = pd.read_parquet(corrected_flightlist_path)
 
             fuel_path = os.path.join(config.DATA_DIR, f'prc-2025-datasets/fuel_{dataset_type}.parquet')
             df_fuel = pd.read_parquet(fuel_path)
 
-            # --- Handle Test Run ---
             if config.TEST_RUN:
-                logging.info(f"Test run enabled. Sampling {config.TEST_RUN_FRACTION:.0%} of the {dataset_type} data from the beginning.")
-                df_flightlist = df_flightlist.sample(frac=config.TEST_RUN_FRACTION, random_state=42).copy()
-                logging.info(f"Sampled {dataset_type} flightlist has {df_flightlist.shape[0]} rows.")
-
+                logging.info(f"Test run enabled. Sampling {config.TEST_RUN_FRACTION:.0%} of the {dataset_type} data.")
+                valid_flight_ids = df_fuel['flight_id'].unique()
+                df_flightlist_corrected = df_flightlist_corrected[df_flightlist_corrected['flight_id'].isin(valid_flight_ids)]
+                
+                sampled_flight_ids = df_flightlist_corrected['flight_id'].sample(frac=config.TEST_RUN_FRACTION, random_state=42).unique()
+                df_flightlist_corrected = df_flightlist_corrected[df_flightlist_corrected['flight_id'].isin(sampled_flight_ids)].copy()
+                df_fuel = df_fuel[df_fuel['flight_id'].isin(sampled_flight_ids)].copy()
+                
+                logging.info(f"Sampled {dataset_type} flightlist has {df_flightlist_corrected.shape[0]} rows.")
 
             df_ac_perf = pd.read_csv(os.path.join(config.RAW_DATA_DIR, 'acPerfOpenAP.csv'))
             df_apt = pd.read_parquet(os.path.join(config.DATA_DIR, 'prc-2025-datasets/apt.parquet'))
             
-            # Dynamically set trajectory path
             trajectories_dir = os.path.join(config.INTERPOLATED_TRAJECTORIES_DIR, f'flights_{dataset_type}')
-            if not os.path.exists(trajectories_dir):
-                logging.error(f"Trajectory directory not found for {dataset_type}: {trajectories_dir}")
-                continue
 
         except FileNotFoundError as e:
-            logging.error(f"Error: Raw data file not found for {dataset_type}. {e}")
+            logging.error(f"Error: A required data file was not found for {dataset_type}. {e}. Please ensure 'correct_timestamps' has been run.")
             continue
 
-        # --- 2. Preprocess and Merge Data ---
-        logging.info(f"Preprocessing and merging all datasets for {dataset_type}...")
+        # --- 2. Merge Data (starting from corrected flightlist) ---
+        logging.info(f"Merging all datasets for {dataset_type}...")
 
-        # Correct dates on the flight list BEFORE merging
-        logging.info("Correcting takeoff and landing times...")
-        df_flightlist_corrected = correct_date.joincdates(df_flightlist, df_apt, trajectories_dir)
-
-        # Merge flight list with aircraft performance data
         df_merged = pd.merge(df_flightlist_corrected, df_ac_perf, left_on='aircraft_type', right_on='ICAO_TYPE_CODE', how='left')
-        
-        # Merge with fuel data (right merge to keep all flight segments)
         df_merged = pd.merge(df_merged, df_fuel, on='flight_id', how='right')
-
-        # Merge with all airport data for origin and destination
         df_merged = pd.merge(df_merged, df_apt.add_prefix('origin_'), left_on='origin_icao', right_on='origin_icao', how='left')
         df_merged = pd.merge(df_merged, df_apt.add_prefix('destination_'), left_on='destination_icao', right_on='destination_icao', how='left')
 
-        df_merged['start'] = pd.to_datetime(df_merged['start'])
-        df_merged['end'] = pd.to_datetime(df_merged['end'])
-        
-        if dataset_type == 'train':
-            df_merged.dropna(subset=['fuel_kg', 'aircraft_type'], inplace=True)
-        else:
-            df_merged.dropna(subset=['aircraft_type'], inplace=True)
-
-        df_merged.reset_index(drop=True, inplace=True)
-
-        logging.info(f"Load and Merged {dataset_type}. Dataset has {df_merged.shape[0]} rows and {df_merged.shape[1]} columns")
-        
-        # --- 3. Merge Weather Data ---
+        # --- 3. Merge Weather Data (using simple flight_id merge) ---
         if df_metar is not None:
-            logging.info("Merging weather data...")
-            # Departure weather
-            df_merged = pd.merge_asof(df_merged.sort_values('takeoff'), 
-                                      df_metar.add_prefix('dep_').rename(columns={'dep_ICAO_ID': 'origin_icao', 'dep_timestamp': 'takeoff'}),
-                                      on='takeoff', left_on='origin_icao', right_on='origin_icao',
-                                      direction='nearest', tolerance=pd.Timedelta(hours=1))
-            # Arrival weather
-            df_merged = pd.merge_asof(df_merged.sort_values('landed'),
-                                      df_metar.add_prefix('arr_').rename(columns={'arr_ICAO_ID': 'destination_icao', 'arr_timestamp': 'landed'}),
-                                      on='landed', left_on='destination_icao', right_on='destination_icao',
-                                      direction='nearest', tolerance=pd.Timedelta(hours=1))
+            logging.info("Merging weather data on 'flight_id'...")
+            df_merged = pd.merge(df_merged, df_metar, on='flight_id', how='left')
             logging.info("Weather data merged.")
         
         df_to_process = df_merged
@@ -209,51 +204,21 @@ def prepare_data():
         )
 
         # --- 5. Drop Columns with High Missing Values ---
-        logging.info("Dropping columns with high missing values...")
         cols_to_drop = _get_columns_to_drop()
-        
         cols_to_drop_existing = [col for col in cols_to_drop if col in df_featured.columns]
         if cols_to_drop_existing:
             df_featured.drop(columns=cols_to_drop_existing, inplace=True)
-            logging.info(f"Dropped {len(cols_to_drop_existing)} columns for {dataset_type}.")
 
-        # --- 6. Impute Missing Values ---
-        logging.info(f"Imputing missing values for {dataset_type}...")
-
-        trajectory_cols = ['std_vertical_rate', 'ending_altitude', 'altitude_difference', 'mean_track', 'std_track',
-                               'starting_altitude', 'mean_vertical_rate', 'mean_dist_to_origin_km', 'mean_dist_to_dest_km']
-        for col in trajectory_cols:
-            if col in df_featured.columns and df_featured[col].isnull().any():
-                median_val = df_featured[col].median()
-                df_featured[col].fillna(median_val, inplace=True)
-                logging.info(f"Imputed missing values in '{col}' with median value: {median_val}")
-
-        seg_cols = [c for c in df_featured.columns if c.startswith('seg_')]
-        for col in seg_cols:
-            if col in df_featured.columns and pd.api.types.is_numeric_dtype(df_featured[col]) and df_featured[col].isnull().any():
-                median_val = df_featured[col].median()
-                df_featured[col].fillna(median_val, inplace=True)
-                logging.info(f"Imputed missing values in segment feature '{col}' with median value: {median_val}")
-
-        aircraft_cols = ['engine_default', 'flaps_type', 'engine_mount']
-        for col in aircraft_cols:
-            if col in df_featured.columns and df_featured[col].isnull().any():
-                mode_val = df_featured[col].mode()[0]
-                df_featured[col].fillna(mode_val, inplace=True)
-                logging.info(f"Imputed missing values in '{col}' with mode value: {mode_val}")
-
-        # --- 7. Generate Introspection Files ---
+        # --- 6. Generate Introspection Files ---
         run_id = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
         introspection.generate_introspection_files(
             df_featured,
-            f"data_preparation_after_imputation_{dataset_type}",
+            f"data_preparation_before_imputation_{dataset_type}",
             run_id,
             target_variable='fuel_kg' if dataset_type == 'train' else None
         )
 
-        # --- 8. Save Processed Data ---
-        logging.info(f"Data Preparation for {dataset_type} Finalized. Dataset has {df_featured.shape[0]} rows and {df_featured.shape[1]} columns")
-        
+        # --- 7. Save Processed Data ---
         test_suffix = '_test' if config.TEST_RUN else ''
         output_filename = f"featured_data_{dataset_type}{test_suffix}.parquet"
         output_path = os.path.join(config.PROCESSED_DATA_DIR, output_filename)
@@ -263,4 +228,7 @@ def prepare_data():
     logging.info("--- Data Preparation Stage Complete ---")
 
 if __name__ == '__main__':
+    # This main block can be used for direct testing if needed,
+    # but the primary entry point is now run_pipeline.py
+    correct_timestamps_for_all()
     prepare_data()

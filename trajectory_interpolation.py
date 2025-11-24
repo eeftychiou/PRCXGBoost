@@ -6,209 +6,138 @@ from datetime import datetime
 import config # Import the config module
 from tqdm import tqdm # Import tqdm for progress bar
 import warnings
+from openap.phase import FlightPhase # Import openap
+
+# Suppress specific warnings
 warnings.simplefilter("ignore", category=FutureWarning)
+warnings.filterwarnings("ignore", category=RuntimeWarning)
+
 
 # --- Logger Setup ---
-# Get the root logger
-logger = logging.getLogger()
-logger.setLevel(logging.INFO) # Set the minimum level for the logger to capture all levels of messages
-
-# Create a formatter
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO) 
 formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
-
-# Create a FileHandler for logging errors to a file
-log_file_path = os.path.join(config.INTROSPECTION_DIR, 'trajectory_interpolation.log')
-os.makedirs(config.INTROSPECTION_DIR, exist_ok=True) # Ensure log directory exists
+log_file_path = os.path.join('logs', 'trajectory_interpolation.log')
+os.makedirs('logs', exist_ok=True)
 file_handler = logging.FileHandler(log_file_path)
-file_handler.setLevel(config.LOG_LEVEL) # Use LOG_LEVEL from config for file
+file_handler.setLevel(config.LOG_LEVEL)
 file_handler.setFormatter(formatter)
 logger.addHandler(file_handler)
-
-# Create a StreamHandler for logging to console
-# Suppress console output to only show progress bar and fatal errors
 console_handler = logging.StreamHandler()
-console_handler.setLevel(config.LOG_LEVEL) # Use LOG_LEVEL from config for console
+console_handler.setLevel(logging.INFO)
 console_handler.setFormatter(formatter)
 logger.addHandler(console_handler)
-
 # --- End Logger Setup ---
 
-def create_interpolation_diff(df_original, df_interpolated, file_name, columns_to_interpolate):
+def detect_phases_with_openap(df, file_name):
+    """Detects flight phases using the openap library, following the correct usage."""
+    required_cols = ['altitude', 'groundspeed', 'vertical_rate']
+    if not all(col in df.columns for col in required_cols):
+        logger.warning(f"One or more required columns for OpenAP ({required_cols}) are missing. Skipping phase detection.")
+        df['phase'] = 'NA' # Use 'NA' as per openap documentation for unlabeled
+        return df
+
+    # Ensure timestamp is a column, not the index
+    if df.index.name == 'timestamp':
+        df = df.reset_index()
+
+    # Check for empty or all-NaN data before processing
+    if df[required_cols].isna().all().all():
+        logger.warning(f"Key columns for phase detection are all NaN. Skipping OpenAP in {file_name}.")
+        df['phase'] = 'NA'
+        return df
+
+    ts = (df.timestamp - df.timestamp.iloc[0]).dt.total_seconds()
+    alt = df.altitude.values
+    spd = df.groundspeed.values
+    roc = df.vertical_rate.values
+
+    fp = FlightPhase()
+    fp.set_trajectory(ts, alt, spd, roc)
+    
+    df['phase'] = fp.phaselabel()
+    return df
+
+def interpolate_trajectories():
     """
-    Compares original and interpolated dataframes to find differences and saves them to a CSV file.
+    Processes trajectory files, optionally detects phases, injects segment boundaries, 
+    interpolates missing values, and saves the processed files.
     """
-    diff_list = []
-    # Align indices to be safe, assuming row order is preserved.
-    df_orig = df_original.reset_index(drop=True)
-    df_interp = df_interpolated.reset_index(drop=True)
-
-    for col in columns_to_interpolate:
-        if col in df_orig.columns and col in df_interp.columns:
-            # Find where original was null and interpolated is not.
-            interpolated_mask = df_orig[col].isnull() & df_interp[col].notnull()
-
-            if interpolated_mask.any():
-                # Identify columns present in both dataframes for diffing
-                diff_cols = ['timestamp', 'flight_id']
-                if all(c in df_orig.columns for c in diff_cols):
-                    diff_df = pd.DataFrame({
-                        'timestamp': df_orig.loc[interpolated_mask, 'timestamp'],
-                        'flight_id': df_orig.loc[interpolated_mask, 'flight_id'],
-                        'column': col,
-                        'original_value': df_orig.loc[interpolated_mask, col],
-                        'interpolated_value': df_interp.loc[interpolated_mask, col]
-                    })
-                    diff_list.append(diff_df)
-                else:
-                    logger.warning(f"Skipping diff for column '{col}' in {file_name} due to missing 'timestamp' or 'flight_id'.")
-
-
-    if diff_list:
-        full_diff_df = pd.concat(diff_list, ignore_index=True)
-        diff_filename = f"interpolation_diff_{os.path.splitext(file_name)[0]}.csv"
-        diff_filepath = os.path.join(config.INTROSPECTION_DIR, diff_filename)
-        os.makedirs(config.INTROSPECTION_DIR, exist_ok=True) # Ensure dir exists
-        full_diff_df.to_csv(diff_filepath, index=False)
-        logger.info(f"Saved interpolation differences to {diff_filepath}")
-    else:
-        logger.info(f"No interpolation differences found to log for {file_name}.")
-
-def interpolate_trajectories(test_mode: bool = False, sample_size: int = 5, diff_all_files: bool = False):
-    """
-    Processes trajectory files from specified input directories, interpolates missing values,
-    and saves the processed files to output directories, using paths from config.py.
-    Includes progress tracking and resumability.
-
-    Args:
-        test_mode (bool): If True, runs in test mode, processing only a small sample
-                          and reporting on missing value reduction.
-        sample_size (int): Number of sample files to save for debugging/verification
-                           (only applies if not in test_mode).
-        diff_all_files (bool): If True, creates a diff file for every processed file.
-                               Otherwise, diffs are only created for samples in normal mode.
-    """
-    input_base_dir = os.path.join(config.DATA_DIR, 'prc-2025-datasets') # Assuming raw trajectories are here
+    input_base_dir = os.path.join(config.DATA_DIR, 'filtered_trajectories')
     output_base_dir = config.INTERPOLATED_TRAJECTORIES_DIR
+    fuel_data_dir = os.path.join(config.DATA_DIR, 'prc-2025-datasets')
 
     logger.info(f"Starting trajectory interpolation process.")
     logger.info(f"Input base directory: {input_base_dir}")
     logger.info(f"Output base directory: {output_base_dir}")
-    if test_mode:
-        # In test mode, prompt the user for a filename.
-        test_filename = input("Enter the filename of the trajectory file to process (from flights_train): ")
-        test_file_path = os.path.join(input_base_dir, 'flights_train', test_filename)
+    
+    logger.info("Loading all fuel data to get segment boundaries...")
+    fuel_files = glob.glob(os.path.join(fuel_data_dir, 'fuel_*.parquet'))
+    if not fuel_files:
+        raise FileNotFoundError("No fuel files found. Cannot inject segment boundaries.")
+    
+    all_fuel_data = pd.concat([pd.read_parquet(f) for f in fuel_files], ignore_index=True)
+    all_fuel_data['start'] = pd.to_datetime(all_fuel_data['start'])
+    all_fuel_data['end'] = pd.to_datetime(all_fuel_data['end'])
+    all_fuel_data['flight_id'] = all_fuel_data['flight_id'].astype(str)
 
-        logger.warning(f"Running in TEST MODE. Processing single file: {test_file_path}")
-        if not os.path.exists(test_file_path):
-            logger.error(f"Test file not found: {test_file_path}")
-            return
+    files_to_process = []
+    sub_dirs = ['flights_train', 'flights_rank', 'flights_final']
+    for sub_dir in sub_dirs:
+        input_dir = os.path.join(input_base_dir, sub_dir)
+        if not os.path.exists(input_dir):
+            logger.warning(f"Input directory not found, skipping: {input_dir}")
+            continue
+        trajectory_files = glob.glob(os.path.join(input_dir, '*.parquet'))
+        for file_path in trajectory_files:
+            files_to_process.append((file_path, sub_dir))
 
-        files_to_process = [(test_file_path, 'flights_train')]
-        test_output_dir = os.path.join(output_base_dir, 'test_output')
-        os.makedirs(test_output_dir, exist_ok=True)
-        logger.info(f"Test output will be saved to: {test_output_dir}")
-    else:
-        files_to_process = []
-        sub_dirs = ['flights_train', 'flights_rank']
-        for sub_dir in sub_dirs:
-            input_dir = os.path.join(input_base_dir, sub_dir)
-            trajectory_files = glob.glob(os.path.join(input_dir, '*.parquet'))
-            for file_path in trajectory_files:
-                files_to_process.append((file_path, sub_dir))
-
-    columns_to_interpolate = [
-        'CAS', 'TAS', 'altitude', 'groundspeed', 'latitude', 'longitude',
-        'mach', 'track', 'vertical_rate'
-    ]
-
-    processed_count = 0
-    sample_files_saved = 0
+    columns_to_interpolate = ['altitude', 'groundspeed', 'latitude', 'longitude', 'track', 'vertical_rate']
 
     for file_path, sub_dir in tqdm(files_to_process, desc="Interpolating trajectories", unit="file"):
         file_name = os.path.basename(file_path)
+        flight_id = os.path.splitext(file_name)[0]
         output_dir = os.path.join(output_base_dir, sub_dir)
         output_file_path = os.path.join(output_dir, file_name)
         os.makedirs(output_dir, exist_ok=True)
 
-        if os.path.exists(output_file_path) and not test_mode:
-            logger.info(f"Skipping already processed file: {file_name}")
-            continue
-
         try:
-            df_original = pd.read_parquet(file_path)
-            df = df_original.copy()
+            df = pd.read_parquet(file_path)
+            
+            if df.empty:
+                logger.warning(f"Skipping empty trajectory file: {file_name}")
+                continue
 
-            if 'timestamp' in df.columns:
-                df['timestamp'] = pd.to_datetime(df['timestamp'])
-                # Sort by flight_id and timestamp to ensure correct order for diff()
-                df = df.sort_values(by=['flight_id', 'timestamp'])
-                if df.duplicated(subset=['timestamp']).any():
-                    logger.warning(f"Found duplicate timestamps in {file_name}. Keeping first entry.")
-                    df.drop_duplicates(subset=['timestamp'], keep='first', inplace=True)
-            else:
-                logger.warning(f"Timestamp column not found in {file_path}. Skipping time-based interpolation.")
+            logger.debug(f"Processing {file_name}: {len(df)} rows.")
+            raw_nan_counts = df[columns_to_interpolate].isna().sum()
+            logger.debug(f"Raw NaN counts for {file_name}:\n{raw_nan_counts[raw_nan_counts > 0]}")
 
-            # First, interpolate all columns except vertical_rate
-            for col in [c for c in columns_to_interpolate if c != 'vertical_rate']:
+            df['timestamp'] = pd.to_datetime(df['timestamp'])
+
+            flight_segments = all_fuel_data[all_fuel_data['flight_id'] == flight_id]
+            if not flight_segments.empty:
+                start_times = flight_segments[['start']].rename(columns={'start': 'timestamp'})
+                end_times = flight_segments[['end']].rename(columns={'end': 'timestamp'})
+                boundary_times = pd.concat([start_times, end_times], ignore_index=True).drop_duplicates()
+                df = pd.concat([df, boundary_times]).drop_duplicates(subset='timestamp', keep='first')
+            
+            df = df.set_index('timestamp').sort_index()
+
+            # Perform Interpolation
+            for col in columns_to_interpolate:
                 if col in df.columns:
-                    df[col] = df.groupby('flight_id')[col].transform(lambda group: group.interpolate(method='linear', limit_direction='both'))
-                else:
-                    logger.warning(f"Column '{col}' not found in {file_path}. Skipping interpolation.")
+                    df[col] = df[col].interpolate(method='linear', limit_direction='both')
+            
+            # OpenAP Phase Detection
+            if config.USE_OPENAP_PHASE_DETECTION:
+                df = detect_phases_with_openap(df, file_name)
 
-            # Now, handle vertical_rate
-            if 'vertical_rate' in df.columns and 'altitude' in df.columns:
-                # Calculate altitude difference per flight
-                altitude_diff = df.groupby('flight_id')['altitude'].diff()
-
-                # Fill only the null values of vertical_rate
-                df['vertical_rate'].fillna(altitude_diff, inplace=True)
-
-                # Fill any remaining NaNs (like the first entry per flight) with 0
-                df['vertical_rate'].fillna(0, inplace=True)
-            elif 'vertical_rate' not in df.columns:
-                logger.warning(f"Column 'vertical_rate' not found in {file_path}. Skipping calculation.")
-            elif 'altitude' not in df.columns:
-                logger.warning(f"Column 'altitude' not found in {file_path}. Cannot calculate vertical_rate.")
-
-
-            if test_mode:
-                output_filename = file_name.replace('.parquet', '.csv')
-                output_file_path = os.path.join(test_output_dir, output_filename)
-                df.to_csv(output_file_path, index=False)
-                logger.info(f"Saved test output to {output_file_path}")
-            else:
-                df.to_parquet(output_file_path, index=False)
-
-            processed_count += 1
-
-            if test_mode:
-                create_interpolation_diff(df_original, df, file_name, columns_to_interpolate)
-            else:  # not test_mode
-                if diff_all_files:
-                    create_interpolation_diff(df_original, df, file_name, columns_to_interpolate)
-                elif sample_files_saved < sample_size:
-                    create_interpolation_diff(df_original, df, file_name, columns_to_interpolate)
-
-            if not test_mode and sample_files_saved < sample_size:
-                sample_output_dir = os.path.join(output_base_dir, 'samples')
-                os.makedirs(sample_output_dir, exist_ok=True)
-                sample_file_name = f"interpolated_sample_{sub_dir}_{file_name}"
-                df.head().to_csv(os.path.join(sample_output_dir, sample_file_name.replace('.parquet', '.csv')), index=False)
-                logger.info(f"Saved sample of interpolated data to {os.path.join(sample_output_dir, sample_file_name.replace('.parquet', '.csv'))}")
-                sample_files_saved += 1
+            df.reset_index().to_parquet(output_file_path, index=False)
 
         except Exception as e:
             logger.error(f"Error processing file {file_name}: {e}", exc_info=True)
 
-    logger.info(f"Finished processing. Processed {processed_count} files.")
+    logger.info(f"Finished processing all trajectory files.")
 
 if __name__ == '__main__':
-    # To run in test mode from the command line:
-    # python trajectory_interpolation.py --test
-    import argparse
-    parser = argparse.ArgumentParser(description='Interpolate trajectory data.')
-    parser.add_argument('--test', action='store_true', help='Run in test mode.')
-    parser.add_argument('--diff-all', action='store_true', help='Create diff files for all processed files.')
-    args = parser.parse_args()
-
-    interpolate_trajectories(test_mode=args.test, diff_all_files=args.diff_all)
+    interpolate_trajectories()

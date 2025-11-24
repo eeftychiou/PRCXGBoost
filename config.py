@@ -10,6 +10,7 @@ RAW_DATA_DIR = os.path.join(DATA_DIR, "acPerf")
 PROCESSED_DATA_DIR = os.path.join("processed")
 INTROSPECTION_DIR = "introspection"
 MODELS_DIR = "models"
+SUBMISSIONS_DIR = "submissions" # Added for evaluate_model.py
 
 # --- Source Dataset Paths ---
 BASE_DATASETS_DIR = os.path.join(DATA_DIR, "prc-2025-datasets")
@@ -21,9 +22,12 @@ METARS_DIR = os.path.join(DATA_DIR, "metars")
 INTERPOLATED_TRAJECTORIES_DIR = os.path.join(DATA_DIR, "interpolated_trajectories")
 
 # --- Data Preparation ---
-TEST_RUN = True
+TEST_RUN = False
 TEST_RUN_FRACTION = 0.05  # Use a fraction of the data for test runs
 
+# Feature Engineering Flags
+ENABLE_PHASE_DURATION_FEATURES = False # New flag to control phase duration features
+USE_OPENAP_PHASE_DETECTION = True # New flag for OpenAP phase detection
 
 # Min-Max Scaler Bounds for PINN inputs
 SCALER_BOUNDS = {
