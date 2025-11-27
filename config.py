@@ -25,9 +25,6 @@ INTERPOLATED_TRAJECTORIES_DIR = os.path.join(DATA_DIR, "interpolated_trajectorie
 TEST_RUN = False
 TEST_RUN_FRACTION = 0.05  # Use a fraction of the data for test runs
 
-# Feature Engineering Flags
-ENABLE_PHASE_DURATION_FEATURES = False # New flag to control phase duration features
-USE_OPENAP_PHASE_DETECTION = True # New flag for OpenAP phase detection
 
 # Min-Max Scaler Bounds for PINN inputs
 SCALER_BOUNDS = {

@@ -129,8 +129,7 @@ def interpolate_trajectories():
                     df[col] = df[col].interpolate(method='linear', limit_direction='both')
             
             # OpenAP Phase Detection
-            if config.USE_OPENAP_PHASE_DETECTION:
-                df = detect_phases_with_openap(df, file_name)
+            df = detect_phases_with_openap(df, file_name)
 
             df.reset_index().to_parquet(output_file_path, index=False)
 

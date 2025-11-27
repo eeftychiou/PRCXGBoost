@@ -154,7 +154,7 @@ def train(params_path=None, selected_features_path=None):
     print("Fitting preprocessor and transforming training data...")
     X_train_processed = preprocessor.fit_transform(X_train)
     
-    model_params = {'n_estimators': 500, 'learning_rate': 0.1, 'max_depth': 10, 'random_state': 42, 'n_jobs': -1}
+    model_params = { 'subsample': 0.8, 'reg_lambda': 2, 'reg_alpha': 0.01, 'n_estimators': 1000, 'max_depth': 5, 'learning_rate': 0.01, 'gamma': 0, 'colsample_bytree': 0.7, 'random_state': 42, 'n_jobs': -1}
     model_suffix = "_baseline"
 
     if params_path:
