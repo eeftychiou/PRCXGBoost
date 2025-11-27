@@ -28,7 +28,7 @@ train_flights_path = 'data/prc-2025-datasets/flightlist_train.parquet'
 rank_flights_path = 'data/prc-2025-datasets/flightlist_rank.parquet'
 final_flights_path = 'data/prc-2025-datasets/flightlist_final.parquet'
 original_apt_file_path = apt_file_path + '.original.parquet'
-HTML_DIR = 'htmlfile'  # Directory to save HTML files for debugging
+HTML_DIR = 'data/htmlfile'  # Directory to save HTML files for debugging
 GEOMAGTIME= 2025.0
 geo_mag = pygeomag.GeoMag(coefficients_file='wmm/WMMHR_2025.COF', high_resolution=True)
 
