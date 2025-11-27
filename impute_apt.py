@@ -14,7 +14,9 @@ import time
 import pygeomag
 
 # --- Setup Logging ---
-log_file = 'impute_apt.log'
+log_dir = 'logs'
+os.makedirs(log_dir, exist_ok=True)
+log_file = os.path.join(log_dir, 'impute_apt.log')
 logging.basicConfig(level=logging.INFO, 
                     format='%(asctime)s - %(levelname)s - %(message)s',
                     handlers=[
@@ -47,8 +49,19 @@ def scrape_airport_data():
     airports_no_info = []
     airports_no_runway_details = []
 
-    # --- Backup Original File ---
-    if not os.path.exists(original_apt_file_path):
+    # --- Constants for Web Scraping ---
+    MAX_RETRIES = 3
+    RETRY_DELAY_SECONDS = 5
+    REQUEST_TIMEOUT_SECONDS = 15
+
+    # --- Restore from Original File ---
+    # If an original backup exists, restore it to ensure a clean run.
+    # Otherwise, create the backup for the first time.
+    if os.path.exists(original_apt_file_path):
+        logging.info(f"Restoring '{apt_file_path}' from backup '{original_apt_file_path}'.")
+        shutil.copy(original_apt_file_path, apt_file_path)
+    else:
+        logging.info(f"No original backup found. Creating '{original_apt_file_path}' from '{apt_file_path}'.")
         shutil.copy(apt_file_path, original_apt_file_path)
 
     # --- Load Data ---
@@ -117,25 +130,33 @@ def scrape_airport_data():
             logging.info(f"Using cached HTML for {icao_code} from {html_path}")
         else:
             logging.info(f"Fetching data from {url}")
-            try:
-                time.sleep(1) # Add a 1-second delay
-                response = requests.get(url, timeout=10)
-                response.raise_for_status()
-                html_content = response.text
-                
-                with open(html_path, 'w', encoding='utf-8') as f:
-                    f.write(html_content)
-                logging.info(f"Saved HTML for {icao_code} to {html_path}")
+            for attempt in range(MAX_RETRIES):
+                try:
+                    time.sleep(1) # Add a 1-second delay between requests
+                    response = requests.get(url, timeout=REQUEST_TIMEOUT_SECONDS)
+                    response.raise_for_status()
+                    html_content = response.text
+                    
+                    with open(html_path, 'w', encoding='utf-8') as f:
+                        f.write(html_content)
+                    logging.info(f"Saved HTML for {icao_code} to {html_path}")
+                    break # Success, exit retry loop
 
-            except requests.exceptions.RequestException as e:
-                logging.error(f"Could not fetch data for {icao_code}: {e}. HTML file: {html_path}")
-                logging.warning(f"No HTML file saved for {icao_code} due to fetch error.")
-                airports_no_info.append(icao_code)
-                # If fetching fails, ensure elevation is carried over if it existed in original apt_df
+                except requests.exceptions.RequestException as e:
+                    logging.warning(f"Attempt {attempt + 1}/{MAX_RETRIES} failed for {icao_code}: {e}")
+                    if attempt + 1 == MAX_RETRIES:
+                        logging.error(f"Could not fetch data for {icao_code} after {MAX_RETRIES} attempts. HTML file: {html_path}")
+                        airports_no_info.append(icao_code)
+                    else:
+                        logging.info(f"Retrying in {RETRY_DELAY_SECONDS} seconds...")
+                        time.sleep(RETRY_DELAY_SECONDS)
+            
+            if not html_content:
+                # If fetching failed after all retries, ensure elevation is carried over and skip to next airport
                 if 'elevation' not in row_update:
                      row_update['elevation'] = row['elevation'] if pd.notna(row['elevation']) else pd.NA
                 updated_data.append(row_update)
-                continue # Skip to next airport if fetching failed
+                continue
 
         soup = BeautifulSoup(html_content, 'html.parser')
 
