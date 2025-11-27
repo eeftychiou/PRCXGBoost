@@ -146,7 +146,7 @@ def prepare_data():
         logging.warning(f"Processed METAR file not found at {metar_path}. Weather features will not be added. If this is unexpected, please run the 'prepare_metars' stage first.")
         df_metar = None
 
-    dataset_types = ['train', 'rank', 'final']
+    dataset_types = ['final', 'train', 'rank']
 
     for dataset_type in dataset_types:
         logging.info(f"--- Processing {dataset_type.upper()} Dataset ---")
@@ -156,7 +156,14 @@ def prepare_data():
 
         try:
             corrected_flightlist_path = os.path.join(config.PROCESSED_DATA_DIR, f'corrected_flightlist_{dataset_type}.parquet')
+
             df_flightlist_corrected = pd.read_parquet(corrected_flightlist_path)
+
+            if dataset_type=='final':
+                rank_corrected_flightlist_path = os.path.join(config.PROCESSED_DATA_DIR, 'corrected_flightlist_rank.parquet')
+                df_rank_corrected = pd.read_parquet(rank_corrected_flightlist_path)
+                df_flightlist_corrected = pd.concat([df_flightlist_corrected, df_rank_corrected])
+
 
             fuel_path = os.path.join(config.DATA_DIR, f'prc-2025-datasets/fuel_{dataset_type}.parquet')
             df_fuel = pd.read_parquet(fuel_path)
