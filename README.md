@@ -63,7 +63,7 @@ PRCXGBoost/
     ```
     Install the required packages. A `requirements.txt` file is not yet present, but the core dependencies are:
     ```bash
-    pip install pandas numpy scikit-learn xgboost requests beautifulsoup4 tqdm pygeomag
+    pip install pandas numpy scikit-learn xgboost requests beautifulsoup4 tqdm pygeomag openap fastparquet pyarrow tqdm matplotlib
     ```
 
 3.  **Download WMM Data**: The `impute_apt.py` script requires the World Magnetic Model (WMM) coefficients. Create a `wmm` directory and download the `WMM.COF` file. *Note: The script is currently configured for 2025 data.*
@@ -118,13 +118,39 @@ The main pipeline is controlled by `run_pipeline.py`.
     python run_pipeline.py prepare_data
     ```
 
-4.  **Train a Model**:
+4.  **Data Augmentation and Imputation**:
+    Generate physics-informed features using OpenAP aircraft performance models with dynamic mass tracking and data imputation for ground speed, vertical rate and altitude.
+    Using the provided parquets (Adjust the paths for the data)
+    ```bash
+    python AugmentationTraining.py
+    python AugmentationRank.py
+    python AugmentationFinal.py
+    ```
+
+5.  **Train, Evaluation and Test the XGBoost model for rank and final submission**:
+    Train the XGBoost model with feature selection and hyperparameter optimization to predict fuel consumption.
+    Caches selected features to JSON
+    (Adjust the paths for the data)
+    Reuses cache on subsequent runs (unless --force-sfs)
+
+    From step 3 this are needed: 
+    
+    apt.parquet (airport coordinates)
+    featured_data_merged.parquet (pre-computed training features)
+    featured_data_rank_merged.parquet (pre-computed rank features)
+    featured_data_final_merged.parquet (pre-computed final features)
+    ```bash
+    python XGBoostTraining_Testing.py
+    python XGBoostTraining_Final.py
+    ```
+
+6.  **Train a Model 2nd way**:
     After the data is fully prepared, you can train a model.
     ```bash
     python run_pipeline.py train --model xgb
     ```
 
-5.  **Generate Predictions**:
+7.  **Generate Predictions from step 6**:
     Use a trained model to generate a submission file.
     ```bash
     python run_pipeline.py predict
