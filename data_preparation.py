@@ -182,7 +182,7 @@ def prepare_data():
             df_ac_perf = pd.read_csv(os.path.join(config.RAW_DATA_DIR, 'acPerfOpenAP.csv'))
             df_apt = pd.read_parquet(os.path.join(config.DATA_DIR, 'prc-2025-datasets/apt.parquet'))
             
-            trajectories_dir = os.path.join(config.INTERPOLATED_TRAJECTORIES_DIR, f'flights_{dataset_type}')
+            trajectories_dir = os.path.join(config.INTERPOLATED_TRAJECTORIES_DIR, f'flights_final')
 
         except FileNotFoundError as e:
             logging.error(f"Error: A required data file was not found for {dataset_type}. {e}. Please ensure 'correct_timestamps' has been run.")

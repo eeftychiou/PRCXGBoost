@@ -310,7 +310,9 @@ def augment_features(df, trajectories_folder):
     print("Processing trajectory data for each flight...")
     for flight_id, group in tqdm(df.groupby('flight_id'), total=df['flight_id'].nunique()):
         trajectory_file = os.path.join(trajectories_folder, f"{flight_id}.parquet")
-        if not os.path.exists(trajectory_file): continue
+        if not os.path.exists(trajectory_file):
+            print(f"{trajectory_file} does not exist...")
+            continue
         traj_df = pd.read_parquet(trajectory_file)
         if traj_df.empty or 'latitude' not in traj_df.columns: continue
         
