@@ -84,36 +84,53 @@ These stages prepare all the necessary data for model training. They only need t
     mc cp opensky/prc-2025-datasets/ data/prc-2025-datasets/
     ```
 
-2.  **Filter Trajectories**:
+2.  **Generate Aircraft Performance File (Optional)**:
+    This step creates the `data/acPerf/acPerfOpenAP.csv` file, which contains detailed aircraft performance and behavioral data.
+    
+    **Note**: This file is already provided in the repository. Running these scripts may produce a different result. This step is for documentation purposes.
+    
+    First, run `extract_aircraft_types.py` to get all aircraft types used in the dataset. Then fill in the ac performance parameters from OpenAP using `enrich_aircraft_data.py` followed by `create_behavioral_features.py` to analyze flight trajectories and generate a behavioral signature for each aircraft type. Then, run `impute_aircraft_types.py` to fill in the performance parameters of the missing a/c types (A306, MD11 and B77L)..
+    
+    ```bash
+    python extract_aircraft_types.py
+    python enrich_aircraft_data.py
+    python create_behavioral_features.py
+    python impute_aircraft_types.py
+
+    ```
+    
+    Finally, the wake turbulence category and fuel burn per second for each phase of flight (climb, cruise, descent, etc.) were added manually to the resulting CSV. This data was obtained using Google's Gemini Pro 2.5 with the prompt: *"Fill in a table of the fuel flow consumption in kg/sec of the following aircraft during climb, cruise, descent, level flight and ground taxi:"* followed by the list of aircraft.
+
+3.  **Filter Trajectories**:
     This stage filters the raw trajectory files to remove erroneous data points. It uses the `traffic` library to apply a series of filters that check for inconsistencies in position, speed, and other parameters. This crucial cleaning step ensures the quality of the trajectory data used in downstream tasks. This method is credited to last year's winning submission.
     ```bash
     python filter_trajs.py
     ```
 
-3.  **Interpolate Trajectories**:
+4.  **Interpolate Trajectories**:
     This stage processes the filtered trajectory files. It injects the flight segment start and end timestamps into the data, then uses linear interpolation to fill in any missing values for key fields like `altitude`, `groundspeed`, and `position`. Finally, it uses the `openap` library to detect and label flight phases (e.g., climb, cruise, descent), saving the enriched files to `data/interpolated_trajectories/`.
     ```bash
     python run_pipeline.py interpolate_trajectories
     ```
 
-4.  **Correct Timestamps**:
+5.  **Correct Timestamps**:
     This stage uses the interpolated trajectories to correct the takeoff and landing times in the flight lists. For each flight, it identifies the point in the trajectory closest to the origin and destination airports. The timestamp at this point is then adjusted based on the aircraft's altitude and a standard rate of climb/descent to more accurately estimate the true takeoff and landing times. This method is credited to last year's winning submission.
     ```bash
     python run_pipeline.py correct_timestamps
     ```
 
-5.  **Prepare Weather Data**:
+6.  **Prepare Weather Data**:
     This stage processes the raw METAR files into a clean, flight-keyed dataset. It loads all raw METAR reports and, for each flight, finds the nearest weather station to the origin and destination airports. It then retrieves the most recent weather report for the takeoff and landing times, decodes weather phenomena codes into binary features (e.g., `wx_is_rain`, `wx_is_fog_mist`), and imputes missing values. The final output is a single `processed_metars.parquet` file. While METAR files are included in the repository, they can be re-downloaded by running `python download_metars.py`.
     ```bash
     python run_pipeline.py prepare_metars
     ```
-6.  **Enhance apt.parquet**:
+7.  **Enhance apt.parquet**:
     This script enriches the `apt.parquet` file by scraping detailed airport data from SkyVector. For every airport in the flight lists, it fetches runway information (length, true heading, elevation) and the overall airport elevation. It uses the `pygeomag` library with a World Magnetic Model (WMM) file to convert magnetic runway headings to true headings, which requires the `wmm/WMMHR_2025.COF` file to be present.
     ```bash
     python impute_apt.py
     ```
 
-7.  **Final Data Preparation**:
+8.  **Final Data Preparation**:
     This is the main data preparation stage. It merges all data sources (flight lists, fuel, aircraft performance, airport data, and weather) and runs the full feature engineering pipeline.
     ```bash
     python run_pipeline.py prepare_data
