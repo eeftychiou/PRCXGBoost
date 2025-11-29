@@ -87,9 +87,9 @@ These stages prepare all the necessary data for model training. They only need t
 2.  **Generate Aircraft Performance File (Optional)**:
     This step creates the `data/acPerf/acPerfOpenAP.csv` file, which contains detailed aircraft performance and behavioral data.
     
-    **Note**: This file is already provided in the repository. Running these scripts may produce a different result. This step is for documentation purposes.
+    **Note**: This file is already provided in the repository. Running these scripts again will produce a different result. This step is for documentation purposes.
     
-    First, run `extract_aircraft_types.py` to get all aircraft types used in the dataset. Then fill in the ac performance parameters from OpenAP using `enrich_aircraft_data.py` followed by `create_behavioral_features.py` to analyze flight trajectories and generate a behavioral signature for each aircraft type. Then, run `impute_aircraft_types.py` to fill in the performance parameters of the missing a/c types (A306, MD11 and B77L)..
+    First, run `extract_aircraft_types.py` to get all aircraft types used in the dataset. Then fill in the ac performance parameters from OpenAP using `enrich_aircraft_data.py` followed by `create_behavioral_features.py` to analyze flight trajectories and generate a behavioral signature for each aircraft type. Then, run `impute_aircraft_types.py` to fill in the performance parameters of the missing a/c types (A306, MD11 and B77L).
     
     ```bash
     python extract_aircraft_types.py
@@ -120,7 +120,7 @@ These stages prepare all the necessary data for model training. They only need t
     ```
 
 6.  **Prepare Weather Data**:
-    This stage processes the raw METAR files into a clean, flight-keyed dataset. It loads all raw METAR reports and, for each flight, finds the nearest weather station to the origin and destination airports. It then retrieves the most recent weather report for the takeoff and landing times, decodes weather phenomena codes into binary features (e.g., `wx_is_rain`, `wx_is_fog_mist`), and imputes missing values. The final output is a single `processed_metars.parquet` file. While METAR files are included in the repository, they can be re-downloaded by running `python download_metars.py`.
+    This stage processes the raw METAR files into a clean, flight-keyed dataset. It loads all raw METAR reports and, for each flight, finds the nearest weather station to the origin and destination airports. It then retrieves the most recent weather report for the takeoff and landing times, decodes weather phenomena codes into binary features (e.g., `wx_is_rain`, `wx_is_fog_mist`), and imputes missing values. The final output is a single `processed_metars.parquet` file. While METAR files are included in the repository, they can be re-downloaded by running `python download_metars.py` (download script build upon the last year winners' code).
     ```bash
     python run_pipeline.py prepare_metars
     ```
@@ -129,69 +129,38 @@ These stages prepare all the necessary data for model training. They only need t
     ```bash
     python impute_apt.py
     ```
+9.  **Estimate Passenger Load Factors**:
+    This script estimates the passenger load factor for each airport based on historical data extracted from the IATA Market reports for the months April to August 2025. It uses the `regionalLoadFactor.py` script to estimate the load factor for each airport based on the reported load factor in the report . The results are saved to `processed/average_load_factor_by_airport_pair_v3.csv`.
 
-8.  **Final Data Preparation**:
-    This is the main data preparation stage. It merges all data sources (flight lists, fuel, aircraft performance, airport data, and weather) and runs the full feature engineering pipeline.
+10.  **Data Preparation Step 1**:
+    This is the main data preparation stage. It merges all data sources (flight lists, fuel, aircraft performance, airport data, and weather) and runs the full feature engineering pipeline. This will produce three files featured_data_[stage].parquet in `processed/`.
     ```bash
     python run_pipeline.py prepare_data
     ```
 
+11.  **Data Preparation Step 2**:
+    @TODO: Yianni please add description how to produce your feature set including the synthetic data and how to join the two files
+
 ### Step 2: Feature Selection 
 
 This stage selects the most relevant features for the model, which can improve performance and reduce training time.
+@TODO: Yianni please add a description how we selected the relevant features
 
-```bash
-# Example: Select features using XGBoost's feature importance
-python run_pipeline.py select_features --fs_model xgb --fs_method importance
-```
-This will create a JSON file in `processed/feature_sets/` containing the list of selected features. Note the path to this file for the next step.
 
-### Step 3: Model Training
-
-Train the model using the prepared data and the selected features.
-
-```bash
-# Example: Train an XGBoost model with the selected features
-python run_pipeline.py train --model xgb --features "path/to/your/selected_features.json"
-```
-Replace `"path/to/your/selected_features.json"` with the actual path from the previous step. A new model directory will be created in `models/`.
-
-### Step 4: Hyperparameter Tuning
+### Step 3: Hyperparameter Tuning
 
 Tune the model you just trained to find the optimal hyperparameters.
+@TODO: Yianni please add a description how we tuned the model
 
-1.  **Run the Tuning Script**:
-    ```bash
-    python tune_model.py
-    ```
-2.  **Select the Model**: The script will list all available models. Enter the number corresponding to the model you created in Step 3.
-3.  **Wait for Tuning to Complete**: The script will run `RandomizedSearchCV` and save the best parameters to a `best_params.json` file inside your model's directory.
+### Step 4: Model Training
 
-### Step 5: Re-train with Best Parameters
-
-Re-train your model one last time using the optimal hyperparameters found during tuning.
-
-```bash
-# The tuning script will provide this command at the end
-python run_pipeline.py train --model xgb --features "path/to/your/selected_features.json" --params "path/to/your/best_params.json"
-```
-This will create a new, fully optimized model in the `models/` directory.
+Train the model using the prepared data and the selected features.
+@TODO: Yianni please add a description how to train the model
 
 ### Step 6: Evaluation and Submission
 
 Use your final, tuned model to evaluate its performance and generate submission files.
-
-1.  **Run the Evaluation Script**:
-    ```bash
-    python run_pipeline.py evaluate
-    ```
-2.  **Select Your Final Model**: Choose the tuned model you created in the previous step.
-3.  **Choose the Run Type**: The script will then prompt you to choose what you want to do:
-    -   `evaluate`: Calculates performance metrics (MAE, RMSE, R²) on a validation set.
-    -   `rank`: Generates a `fuel_rank.parquet` submission file.
-    -   `final`: Generates a `fuel_final.parquet` submission file.
-
----
+@TODO: Yianni please add a description how to generate the submission files
 
 ## Configuration (`config.py`)
 
