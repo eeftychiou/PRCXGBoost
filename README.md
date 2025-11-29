@@ -139,28 +139,43 @@ These stages prepare all the necessary data for model training. They only need t
     ```
 
 11.  **Data Preparation Step 2**:
-    @TODO: Yianni please add description how to produce your feature set including the synthetic data and how to join the two files
+    To generate the augmented feature set for fuel consumption prediction, run the three Python scripts sequentially 
+    ```bash
+    python AugmentationTraining.py, python AugmentationRank.py, python AugmentationFinal.py. 
+    ```
+    This files process the provided parquet trajectory files. This process took multiple days on an HPC with a Nvidia V100 so we are attaching the csvs in `data/AugmentedDataFromOPENAP`. We used OpenAP FuelFlow models (with use_synonym=True) to compute physics-based fuel predictions for all 36 supported aircraft via true dynamic mass tracking from flight takeoff.
+
+    If you run the python files after the AugmentationRank and AugmentationFinal finish the process the user will have to merge those two csvs together into the final
+    
+
+### Machine Learning Training ###
+Add the correct paths of the features parquets
+Run `python XGBoostTraining_Testing.py` **first** to generate preprocessing imputers, encoders, scalers, and selected features (saved as `preprocessors_rank.joblib` and `selected_features_sfs3.json`) using 80/20 train/validation
+
+### Step 1: Synthetic Dataset
+Generates 25K synthetic widebody samples (A332/A333/A359/etc.) by perturbing real widebody training data with 5-15% Gaussian noise, emphasizing long segments (top 25% duration) to balance underrepresented widebody classes and reduce RMSE.
 
 ### Step 2: Feature Selection 
 
 This stage selects the most relevant features for the model, which can improve performance and reduce training time.
-@TODO: Yianni please add a description how we selected the relevant features
-
+Uses SequentialFeatureSelector (forward selection, 5-fold CV, XGBoost base estimator) on preprocessed training data to automatically select the most predictive features from 100+ candidate (`selected_features_sfs3.json` which is available in the data folder)
 
 ### Step 3: Hyperparameter Tuning
 
 Tune the model you just trained to find the optimal hyperparameters.
-@TODO: Yianni please add a description how we tuned the model
+Applies RandomizedSearchCV (200 iterations, 5-fold CV) over expanded grid (`max_depth` 7-9, `learning_rate` 0.06-0.08, `n_estimators` 850-950, etc.) on selected features, ranking top-10 models by validation RMSE and evaluates overfitting gap (train vs val RMSE) to select robust top-5 configurations.
+
+The randomized search can be inscreased or decreased based on the user
 
 ### Step 4: Model Training
 
 Train the model using the prepared data and the selected features.
-@TODO: Yianni please add a description how to train the model
+Run `python XGBoostTraining_Final.py` to load XGBoostTraining_Testing.py imputers, retrains top-5 models on 100% augmented data (original + synthetic), produces feature importance analysis and generates hybrid test predictions combining exact XGBoostTraining_Testing.py rank rows with new final submission rows.
 
 ### Step 6: Evaluation and Submission
 
 Use your final, tuned model to evaluate its performance and generate submission files.
-@TODO: Yianni please add a description how to generate the submission files
+Top-10 models produce ranked submissions in `Results/` with validation RMSE, MAE, R² metrics and the best model (lowest val RMSE) is recommended for leaderboard submission
 
 ## Configuration (`config.py`)
 
