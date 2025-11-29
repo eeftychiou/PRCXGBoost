@@ -42,6 +42,11 @@ PRCXGBoost/
 ├── data_preparation.py       # Main script for the data preparation stage
 ├── augment_features.py       # Feature engineering from trajectory data
 ├── train_xgb.py              # Example training script for XGBoost
+├── AugmentationRank.py       # Augmentation and data imputation script, openAP fuel calculation and starting mass using the rank data trajectories
+├── AugmentationFinal.py      # Augmentation and data imputation script, openAP fuel calculation and starting mass using the final data trajectories
+├── AugmentationTraining.py   # Augmentation and data imputation script, openAP fuel calculation and starting mass using the training data trajectories
+├── XGBoostTraining_Testing.py  # Example training script for XGBoost and preparation of preprocessors and selected features
+├── XGBoostTraining_Final.py  # Training script for XGBoost for the final submission
 └── README.md                 # This file
 ```
 

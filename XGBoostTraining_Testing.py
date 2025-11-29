@@ -14,8 +14,6 @@ from math import radians, cos, sin, asin, sqrt
 import time
 import json
 import sys
-from skopt import BayesSearchCV
-from skopt.space import Real, Integer
 import joblib
 
 warnings.filterwarnings('ignore')
