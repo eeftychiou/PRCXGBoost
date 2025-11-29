@@ -149,8 +149,15 @@ These stages prepare all the necessary data for model training. They only need t
     
 
 ### Machine Learning Training ###
-Add the correct paths of the features parquets
-Run `python XGBoostTraining_Testing.py` **first** to generate preprocessing imputers, encoders, scalers, and selected features (saved as `preprocessors_rank.joblib` and `selected_features_sfs3.json`) using 80/20 train/validation
+Add the correct paths to the generated data from Step 1 (Data preparation) 
+DATA_PATH, APT_PATH, FLIGHTLIST_PATH, FUEL_PATH, TEST_CSV_PATH, FUEL_RANK_PATH, RESULTS_DIR, FLIGHTLIST_RANK_PATH, FEATURED_DATA_TRAIN, FEATURED_DATA_TEST, SYNTHETIC_PATH, SELECTED_FEATURES_PATH
+Run 
+```bash
+python XGBoostTraining_Testing.py
+```
+**first** to generate preprocessing imputers, encoders, scalers, and selected features (saved as `preprocessors_rank.joblib` and `selected_features_sfs3.json`) using 80/20 train/validation
+
+### Steps of XGBoostTraining_Testing
 
 ### Step 1: Synthetic Dataset
 Generates 25K synthetic widebody samples (A332/A333/A359/etc.) by perturbing real widebody training data with 5-15% Gaussian noise, emphasizing long segments (top 25% duration) to balance underrepresented widebody classes and reduce RMSE.
@@ -170,7 +177,14 @@ The randomized search can be inscreased or decreased based on the user
 ### Step 4: Model Training
 
 Train the model using the prepared data and the selected features.
-Run `python XGBoostTraining_Final.py` to load XGBoostTraining_Testing.py imputers, retrains top-5 models on 100% augmented data (original + synthetic), produces feature importance analysis and generates hybrid test predictions combining exact XGBoostTraining_Testing.py rank rows with new final submission rows.
+Add the correct paths to the generated data from Step 1 (Data preparation) 
+DATA_PATH, APT_PATH, FLIGHTLIST_PATH, FUEL_PATH, TEST_CSV_PATH, FUEL_RANK_PATH, RESULTS_DIR, FLIGHTLIST_RANK_PATH, FLIGHTLIST_FINAL_PATH, FEATURED_DATA_TRAIN, FEATURED_DATA_TEST, SYNTHETIC_PATH, SELECTED_FEATURES_PATH
+Basically TEST now becomes the FINAL
+Run 
+```bash
+python XGBoostTraining_Final.py` 
+```
+to load XGBoostTraining_Testing.py imputers, retrains top-10 models on 100% augmented data (original + synthetic), produces feature importance analysis and generates hybrid test predictions combining exact XGBoostTraining_Testing.py rank rows with new final submission rows.
 
 ### Step 6: Evaluation and Submission
 
