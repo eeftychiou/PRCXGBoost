@@ -100,20 +100,20 @@ WIDEBODY_AIRCRAFT = ['A332', 'A333', 'A343', 'A359', 'A388', 'B744', 'B748',
                      'B763', 'B772', 'B773', 'B77W', 'B788', 'B789']
 
 # File paths
-DATA_PATH = '/home/ygrigo01/PRC2025/Pettemerides/augmented_openap_correct_mass_ALL_FLIGHTS_final.csv'
-APT_PATH = '/home/ygrigo01/PRC2025/data/apt.parquet'
-FLIGHTLIST_PATH = '/home/ygrigo01/PRC2025/data/flightlist_train.parquet'
-FUEL_PATH = '/home/ygrigo01/PRC2025/data/fuel_train.parquet'
-TEST_CSV_PATH = '/home/ygrigo01/PRC2025/Pettemerides/augmented_openap_rank_final_ALL_FLIGHTS.csv'
-FUEL_RANK_PATH = '/home/ygrigo01/PRC2025/data/fuel_final_submission.parquet'
-FLIGHTLIST_RANK_PATH = '/home/ygrigo01/PRC2025/data/flightlist_rank.parquet'
-FLIGHTLIST_FINAL_PATH = '/home/ygrigo01/PRC2025/data/flightlist_final.parquet'
-RESULTS_DIR = '/home/ygrigo01/PRC2025/Results'
+DATA_PATH = 'data/augmented_openap_correct_mass_ALL_FLIGHTS_final.csv'
+APT_PATH = 'data/apt.parquet'
+FLIGHTLIST_PATH = 'data/flightlist_train.parquet'
+FUEL_PATH = 'data/fuel_train.parquet'
+TEST_CSV_PATH = 'data/augmented_openap_rank_final_ALL_FLIGHTS.csv'
+FUEL_RANK_PATH = 'data/fuel_final_submission.parquet'
+FLIGHTLIST_RANK_PATH = 'data/flightlist_rank.parquet'
+FLIGHTLIST_FINAL_PATH = 'data/flightlist_final.parquet'
+RESULTS_DIR = 'Results'
 
-FEATURED_DATA_TRAIN = '/home/ygrigo01/PRC2025/data/featured_data_merged.parquet'
-FEATURED_DATA_TEST = '/home/ygrigo01/PRC2025/data/featured_data_final4.parquet'
+FEATURED_DATA_TRAIN = 'data/featured_data_merged.parquet'
+FEATURED_DATA_TEST = 'data/featured_data_final4.parquet'
 SYNTHETIC_PATH = os.path.join(RESULTS_DIR, "synthetic_widebody.parquet")
-SELECTED_FEATURES_PATH = '/home/ygrigo01/PRC2025/Results/selected_features_sfs3.json'
+SELECTED_FEATURES_PATH = 'data/selected_features_sfs3.json'
 
 
 os.makedirs(RESULTS_DIR, exist_ok=True)
@@ -694,87 +694,6 @@ def main():
     logger.info("PHASE 5: GRID SEARCH FOR OPTIMAL HYPERPARAMETERS")
     logger.info("="*70)
 
-
-    # EXPANDED PARAMETER GRID - Based on baseline with variations
-    # param_grid = {
-    #     'n_estimators': [750, 800, 850, 900, 950, 1000],
-    #     'learning_rate': [0.05, 0.06, 0.07, 0.08, 0.09, 0.10],
-    #     'max_depth': [6, 7, 8, 9, 10],
-    #     'subsample': [0.80, 0.83, 0.85, 0.87, 0.90, 0.92],
-    #     'colsample_bytree': [0.60, 0.65, 0.68, 0.70, 0.72, 0.75],
-    #     'gamma': [0, 0.05, 0.1, 0.15],
-    #     'reg_alpha': [0.0, 0.03, 0.05, 0.07, 0.10],
-    #     'reg_lambda': [1.5, 2.0, 2.3, 2.5, 3.0],
-    #     'min_child_weight': [1, 2, 3, 4, 5]
-    # }
-
-    # param_grid = {
-    #     'n_estimators': [900],
-    #     'learning_rate': [0.07],
-    #     'max_depth': [8],
-    #     'subsample': [0.80],
-    #     'colsample_bytree': [0.65],
-    #     'gamma': [0.05],
-    #     'reg_alpha': [0.03],
-    #     'reg_lambda': [1.5],
-    #     'min_child_weight': [4]
-    # }
-    # param_grid = {
-    # # Tree structure parameters - test nearby values
-    # 'max_depth': [7, 8, 9],
-    # 'min_child_weight': [3, 4, 5],
-    # 'gamma': [0.03, 0.05, 0.07],
-    
-    # # Sampling parameters - fine-tune around current values
-    # 'subsample': [0.75, 0.80, 0.85],
-    # 'colsample_bytree': [0.60, 0.65, 0.70],
-    
-    # # Regularization - explore L1/L2 balance
-    # 'reg_alpha': [0.01, 0.03, 0.05],
-    # 'reg_lambda': [1.0, 1.5, 2.0],
-    
-    # # Boosting parameters - keep narrow range
-    # 'learning_rate': [0.06, 0.07, 0.08],
-    # 'n_estimators': [850, 900, 950]
-    # }
-
-    # param_grid = {
-    # # Fixed - both configs agree on these
-    # 'max_depth': [8],
-    # 'min_child_weight': [4],
-    # 'learning_rate': [0.07],
-    # 'n_estimators': [900],
-    # 'subsample': [0.80],
-    # 'reg_lambda': [1.5],
-    
-    # # Micro-tune colsample_bytree (diff: 0.60 vs 0.65)
-    # 'colsample_bytree': [0.60, 0.625, 0.65, 0.675],
-    
-    # # Micro-tune gamma (diff: 0.03 vs 0.05)
-    # 'gamma': [0.03, 0.04, 0.05],
-    
-    # # Micro-tune reg_alpha (diff: 0.01 vs 0.03)
-    # 'reg_alpha': [0.01, 0.02, 0.03]
-    # }
-    # param_grid = {
-    # # Expand tree structure parameters
-    # 'max_depth': [7, 8, 9],
-    # 'min_child_weight': [3, 4, 5, 6],
-    
-    # # Expand learning parameters
-    # 'learning_rate': [0.06, 0.065, 0.07, 0.075, 0.08],
-    # 'n_estimators': [850, 875, 900, 925, 950],
-    
-    # # Fine-grain sampling parameters
-    # 'subsample': [0.75, 0.775, 0.80, 0.825, 0.85],
-    # 'colsample_bytree': [0.57, 0.60, 0.625, 0.65, 0.675, 0.70],
-    
-    # # Regularization spectrum
-    # 'gamma': [0.02, 0.03, 0.04, 0.05, 0.06],
-    # 'reg_alpha': [0.005, 0.01, 0.015, 0.02, 0.025, 0.03, 0.04],
-    # 'reg_lambda': [1.0, 1.25, 1.5, 1.75, 2.0]
-    # }
-
     param_grid = {
         'n_estimators': [900],
         'learning_rate': [0.07],
@@ -982,7 +901,7 @@ def main():
     logger.info("🔍 DIAGNOSTIC: Verifying data sources...")
 
     # Check rank CSV row count
-    df_test_rank = pd.read_csv('/home/ygrigo01/PRC2025/Pettemerides/augmented_openap_submission_ALL_FLIGHTSrank.csv')
+    df_test_rank = pd.read_csv('data/augmented_openap_submission_ALL_FLIGHTSrank.csv')
     logger.info(f"Rank CSV total rows: {len(df_test_rank):,}")
     logger.info(f"Rank CSV first 5 flight_ids: {df_test_rank['flight_id'].head().tolist()}")
 
@@ -993,7 +912,7 @@ def main():
     logger.info(f"Final CSV rows 24,290+: {len(df_test_final) - 24289:,}")
 
     # Check featured data differences
-    featured_rank = pd.read_parquet('/home/ygrigo01/PRC2025/data/featured_data_rank_merged.parquet')
+    featured_rank = pd.read_parquet('data/featured_data_rank_merged.parquet')
     featured_final = pd.read_parquet(FEATURED_DATA_TEST)
     logger.info(f"Featured RANK shape: {featured_rank.shape}")
     logger.info(f"Featured FINAL shape: {featured_final.shape}")
@@ -1031,11 +950,11 @@ def main():
     # ========================================================================
     logger.info("🔍 LOADING FUEL SUBMISSION DATA...")
     try:
-        fuel_submission = pd.read_parquet('/home/ygrigo01/PRC2025/data/fuel_submission_final.parquet')
+        fuel_submission = pd.read_parquet('data/fuel_submission_final.parquet')
         logger.info("✅ Loaded fuel_submission_final.parquet")
     except:
         try:
-            fuel_submission = pd.read_parquet('/home/ygrigo01/PRC2025/data/fuelranksubmission.parquet')
+            fuel_submission = pd.read_parquet('data/fuelranksubmission.parquet')
             logger.info("✅ Loaded fuelranksubmission.parquet")
         except:
             fuel_submission = pd.read_parquet(FUEL_RANK_PATH)
@@ -1044,9 +963,9 @@ def main():
     fuel_rank_intervals = fuel_submission[['flight_id', 'idx', 'start', 'end']].rename(columns={'idx': 'interval_idx'})
 
     # Load other data
-    rank_csv = pd.read_csv('/home/ygrigo01/PRC2025/Pettemerides/augmented_openap_submission_ALL_FLIGHTSrank.csv', delimiter=',', low_memory=False)
+    rank_csv = pd.read_csv('data/augmented_openap_submission_ALL_FLIGHTSrank.csv', delimiter=',', low_memory=False)
     final_csv = pd.read_csv(TEST_CSV_PATH, delimiter=',', low_memory=False)
-    featured_data_rank = pd.read_parquet('/home/ygrigo01/PRC2025/data/featured_data_rank_merged.parquet').rename(columns={'idx': 'interval_idx'})
+    featured_data_rank = pd.read_parquet('data/featured_data_rank_merged.parquet').rename(columns={'idx': 'interval_idx'})
     featured_data_final = pd.read_parquet(FEATURED_DATA_TEST).rename(columns={'idx': 'interval_idx'})
 
     # ========================================================================
