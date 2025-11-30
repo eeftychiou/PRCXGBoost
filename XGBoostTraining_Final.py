@@ -98,17 +98,19 @@ WIDEBODY_AIRCRAFT = ['A332', 'A333', 'A343', 'A359', 'A388', 'B744', 'B748',
                      'B763', 'B772', 'B773', 'B77W', 'B788', 'B789']
 
 # File paths
-DATA_PATH = 'data/augmented_openap_correct_mass_ALL_FLIGHTS_final.csv'
+DATA_PATH = 'data/AugmentedDataFromOPENAP/augmented_openap_correct_mass_ALL_FLIGHTS_final.csv'
 APT_PATH = 'data/apt.parquet'
 FLIGHTLIST_PATH = 'data/flightlist_train.parquet'
 FUEL_PATH = 'data/fuel_train.parquet'
-TEST_CSV_PATH = 'data/augmented_openap_rank_final_ALL_FLIGHTS.csv'
+TEST_CSV_PATH = 'data/AugmentedDataFromOPENAP/augmented_openap_rank_final_ALL_FLIGHTS.csv'
+RANK_CSV_PATH = 'data/AugmentedDataFromOPENAP/augmented_openap_submission_ALL_FLIGHTSrank.csv'
 FUEL_RANK_PATH = 'data/fuel_final_submission.parquet'
 FLIGHTLIST_RANK_PATH = 'data/flightlist_rank.parquet'
 FLIGHTLIST_FINAL_PATH = 'data/flightlist_final.parquet'
 RESULTS_DIR = 'Results'
 
 FEATURED_DATA_TRAIN = 'data/featured_data_merged.parquet'
+FEATURED_DATA_RANK = 'data/featured_data_rank_merged.parquet'
 FEATURED_DATA_TEST = 'data/featured_data_final4.parquet'
 SYNTHETIC_PATH = os.path.join(RESULTS_DIR, "synthetic_widebody.parquet")
 SELECTED_FEATURES_PATH = 'data/selected_features_sfs3.json'
@@ -691,7 +693,7 @@ def main():
     logger.info("\n" + "="*70)
     logger.info("PHASE 5: GRID SEARCH FOR OPTIMAL HYPERPARAMETERS")
     logger.info("="*70)
-    
+
     # param_grid = {
     # # Expand tree structure parameters
     # 'max_depth': [7, 8, 9],
@@ -928,7 +930,7 @@ def main():
     logger.info(f"Final CSV rows 24,290+: {len(df_test_final) - 24289:,}")
 
     # Check featured data differences
-    featured_rank = pd.read_parquet('data/featured_data_rank_merged.parquet')
+    featured_rank = pd.read_parquet(FEATURED_DATA_RANK)
     featured_final = pd.read_parquet(FEATURED_DATA_TEST)
     logger.info(f"Featured RANK shape: {featured_rank.shape}")
     logger.info(f"Featured FINAL shape: {featured_final.shape}")
@@ -970,7 +972,7 @@ def main():
         logger.info("✅ Loaded fuel_submission_final.parquet")
     except:
         try:
-            fuel_submission = pd.read_parquet('data/fuelranksubmission.parquet')
+            fuel_submission = pd.read_parquet('data/fuel_submission_final.parquet')
             logger.info("✅ Loaded fuelranksubmission.parquet")
         except:
             fuel_submission = pd.read_parquet(FUEL_RANK_PATH)
@@ -979,9 +981,9 @@ def main():
     fuel_rank_intervals = fuel_submission[['flight_id', 'idx', 'start', 'end']].rename(columns={'idx': 'interval_idx'})
 
     # Load other data
-    rank_csv = pd.read_csv('data/augmented_openap_submission_ALL_FLIGHTSrank.csv', delimiter=',', low_memory=False)
+    rank_csv = pd.read_csv(RANK_CSV_PATH, delimiter=',', low_memory=False)
     final_csv = pd.read_csv(TEST_CSV_PATH, delimiter=',', low_memory=False)
-    featured_data_rank = pd.read_parquet('data/featured_data_rank_merged.parquet').rename(columns={'idx': 'interval_idx'})
+    featured_data_rank = pd.read_parquet(FEATURED_DATA_RANK).rename(columns={'idx': 'interval_idx'})
     featured_data_final = pd.read_parquet(FEATURED_DATA_TEST).rename(columns={'idx': 'interval_idx'})
 
     # ========================================================================
