@@ -152,12 +152,13 @@ These stages prepare all the necessary data for model training. They only need t
 
 11.  **Data Preparation Step 2**:
     To generate the augmented feature set for fuel consumption prediction, run the three Python scripts sequentially 
+
+    This files process the provided parquet trajectory files. This process took multiple days on an HPC with a Nvidia V100 so we are attaching the csvs in `data/AugmentedDataFromOPENAP`. We used OpenAP FuelFlow models (with use_synonym=True) to compute physics-based fuel predictions for all 36 supported aircraft via true dynamic mass tracking from flight takeoff.
+    If you run the python files after the AugmentationRank and AugmentationFinal finish the process the user will have to merge those two csvs together into the final
     ```bash
     python AugmentationTraining.py, python AugmentationRank.py, python AugmentationFinal.py. 
     ```
-    This files process the provided parquet trajectory files. This process took multiple days on an HPC with a Nvidia V100 so we are attaching the csvs in `data/AugmentedDataFromOPENAP`. We used OpenAP FuelFlow models (with use_synonym=True) to compute physics-based fuel predictions for all 36 supported aircraft via true dynamic mass tracking from flight takeoff.
 
-    If you run the python files after the AugmentationRank and AugmentationFinal finish the process the user will have to merge those two csvs together into the final
     
 
 ### Machine Learning Training ###
@@ -188,7 +189,7 @@ The randomized search can be inscreased or decreased based on the user
 
 in both `XGBoostTraining_Testing.py` and `XGBoostTraining_Final.py` the param_grid is commented out and we left the best model parameters, feel free to run the hyperparameter tuning by uncommenting the param_grid
 
-### Step 4: Model Training
+### Step 4: Final Model Training
 
 Train the model using the prepared data and the selected features.
 Add the correct paths to the generated data from Step 1 (Data preparation) 
@@ -200,7 +201,7 @@ python XGBoostTraining_Final.py
 ```
 to load XGBoostTraining_Testing.py imputers, retrains top-10 models on 100% augmented data (original + synthetic), produces feature importance analysis and generates hybrid test predictions combining exact XGBoostTraining_Testing.py rank rows with new final submission rows.
 
-### Step 6: Evaluation and Submission
+### Step 5: Evaluation and Submission
 
 Use your final, tuned model to evaluate its performance and generate submission files.
 Top-10 models produce ranked submissions in `Results/` with validation RMSE, MAE, R² metrics and the best model (lowest val RMSE) is recommended for leaderboard submission
