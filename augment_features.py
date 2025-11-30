@@ -457,12 +457,12 @@ def augment_features(df, trajectories_folder):
         df['mean_time_in_air'] = np.maximum(0, mean_time_in_air)
 
 
-    df['fuel_consumption_gnd'] = df['segment_duration'] * df['GND']
-    df['fuel_consumption_cl'] = df['segment_duration'] * df['CL']
-    df['fuel_consumption_de'] = df['segment_duration'] * df['DE']
-    df['fuel_consumption_lvl'] = df['segment_duration'] * df['LVL']
-    df['fuel_consumption_cr'] = df['segment_duration'] * df['CR']
-    df['fuel_consumption_na'] = df['segment_duration'] * df['NA']
+    df['fuel_consumption_gnd'] = df['phase_duration_gnd'] * df['GND']
+    df['fuel_consumption_cl'] = df['phase_duration_cl'] * df['CL']
+    df['fuel_consumption_de'] = df['phase_duration_de'] * df['DE']
+    df['fuel_consumption_lvl'] = df['phase_duration_lvl'] * df['LVL']
+    df['fuel_consumption_cr'] = df['phase_duration_cr'] * df['CR']
+    df['fuel_consumption_na'] = df['phase_duration_na'] * df['NA']
 
     df['fuel_consumption'] =df['fuel_consumption_gnd'] + df ['fuel_consumption_cl'] + df['fuel_consumption_de'] +\
                             df['fuel_consumption_lvl'] + df['fuel_consumption_cr'] +  df['fuel_consumption_na']
