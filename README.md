@@ -146,18 +146,15 @@ These stages prepare all the necessary data for model training. They only need t
     - **Aircraft Performance and Mass Estimation Features:** It calculates an `estimated_takeoff_mass` based on the aircraft's operating empty weight, estimated payload, and estimated fuel load. It also computes a `seg_avg_burn_rate`, which is a weighted average fuel burn rate for the segment based on the time spent in each flight phase.
     - **Advanced Features:** The script generates interaction features (e.g., `duration_x_estimated_takeoff_mass`) and polynomial features (e.g., `segment_duration_sq`) to capture more complex, non-linear relationships.
     This will produce three files featured_data_[stage].parquet in `processed/`.
-    ```bash
+
     python run_pipeline.py prepare_data
-    ```
+
 
 11.  **Data Preparation Step 2**:
-    To generate the augmented feature set for fuel consumption prediction, run the three Python scripts sequentially 
+    To generate the augmented feature set for fuel consumption prediction, run the three Python scripts sequentially. This files process the provided parquet trajectory files. This process took multiple days on an HPC with a Nvidia V100 so we are attaching the csvs in `data/AugmentedDataFromOPENAP`. We used OpenAP FuelFlow models (with use_synonym=True) to compute physics-based fuel predictions for all 36 supported aircraft via true dynamic mass tracking from flight takeoff. If you run the python files after the AugmentationRank and AugmentationFinal finish the process the user will have to merge those two csvs together into the final
 
-    This files process the provided parquet trajectory files. This process took multiple days on an HPC with a Nvidia V100 so we are attaching the csvs in `data/AugmentedDataFromOPENAP`. We used OpenAP FuelFlow models (with use_synonym=True) to compute physics-based fuel predictions for all 36 supported aircraft via true dynamic mass tracking from flight takeoff.
-    If you run the python files after the AugmentationRank and AugmentationFinal finish the process the user will have to merge those two csvs together into the final
-    ```bash
     python AugmentationTraining.py, python AugmentationRank.py, python AugmentationFinal.py. 
-    ```
+
 
     
 
