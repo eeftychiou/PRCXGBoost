@@ -150,7 +150,7 @@ These stages prepare all the necessary data for model training. They only need t
     python run_pipeline.py prepare_data
 
 
-11.  **Data Preparation Step 2**:
+10.  **Data Preparation Step 2**:
     To generate the augmented feature set for fuel consumption prediction, run the three Python scripts sequentially. This files process the provided parquet trajectory files. This process took multiple days on an HPC with a Nvidia V100 so we are attaching the csvs in `data/AugmentedDataFromOPENAP`. We used OpenAP FuelFlow models (with use_synonym=True) to compute physics-based fuel predictions for all 36 supported aircraft via true dynamic mass tracking from flight takeoff. If you run the python files after the AugmentationRank and AugmentationFinal finish the process the user will have to merge those two csvs together into the final
 
     python AugmentationTraining.py, python AugmentationRank.py, python AugmentationFinal.py. 
