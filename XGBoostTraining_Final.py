@@ -109,11 +109,11 @@ FLIGHTLIST_RANK_PATH = 'data/flightlist_rank.parquet'
 FLIGHTLIST_FINAL_PATH = 'data/flightlist_final.parquet'
 RESULTS_DIR = 'Results'
 
-FEATURED_DATA_TRAIN = 'data/featured_data_merged.parquet'
-FEATURED_DATA_RANK = 'data/featured_data_rank_merged.parquet'
-FEATURED_DATA_TEST = 'data/featured_data_final4.parquet'
+FEATURED_DATA_TRAIN = 'data/featured_data_train.parquet'
+FEATURED_DATA_RANK = 'data/featured_data_rank.parquet'
+FEATURED_DATA_TEST = 'data/featured_data_final.parquet'
 SYNTHETIC_PATH = os.path.join(RESULTS_DIR, "synthetic_widebody.parquet")
-SELECTED_FEATURES_PATH = 'data/selected_features_sfs3.json'
+SELECTED_FEATURES_PATH = 'data/selected_features_sfs.json'
 
 
 os.makedirs(RESULTS_DIR, exist_ok=True)

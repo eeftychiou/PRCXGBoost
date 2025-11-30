@@ -108,11 +108,11 @@ FUEL_RANK_PATH = 'data/fuel_rank_submission.parquet'
 FLIGHTLIST_RANK_PATH = 'data/flightlist_rank.parquet'
 RESULTS_DIR = 'Results'
 
-FEATURED_DATA_TRAIN = 'data/featured_data_merged.parquet'
-FEATURED_DATA_TEST = 'data/featured_data_rank_merged.parquet'
+FEATURED_DATA_TRAIN = 'data/featured_data_train.parquet'
+FEATURED_DATA_TEST = 'data/featured_data_rank.parquet'
 
-SELECTED_FEATURES_PATH = 'data/selected_features_sfs3.json'
-SYNTHETIC_PATH = os.path.join(RESULTS_DIR, "synthetic_widebodyRank.parquet")
+SELECTED_FEATURES_PATH = 'data/selected_features_sfs.json'
+SYNTHETIC_PATH = os.path.join(RESULTS_DIR, "synthetic_widebody.parquet")
 os.makedirs(RESULTS_DIR, exist_ok=True)
 
 log_file = os.path.join(RESULTS_DIR, f'xgboost_top5_models_{datetime.now().strftime("%Y%m%d_%H%M%S")}.log')
