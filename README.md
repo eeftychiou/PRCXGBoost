@@ -138,7 +138,13 @@ These stages prepare all the necessary data for model training. They only need t
     This script estimates the passenger load factor for each airport based on historical data extracted from the IATA Market reports for the months April to August 2025. It uses the `regionalLoadFactor.py` script to estimate the load factor for each airport based on the reported load factor in the report . The results are saved to `processed/average_load_factor_by_airport_pair_v3.csv`.
 
 10.  **Data Preparation Step 1**:
-    This is the main data preparation stage. It merges all data sources (flight lists, fuel, aircraft performance, airport data, and weather) and runs the full feature engineering pipeline. This will produce three files featured_data_[stage].parquet in `processed/`.
+    This is the main data preparation stage. It merges all data sources (flight lists, fuel, aircraft performance, airport data, and weather) and runs the full feature engineering pipeline via `augment_features.py`. This script creates a wide variety of features, which can be grouped into the following categories:
+    - **Basic Flight and Segment Features:** Includes `segment_duration`, `flight_duration_seconds`, `great_circle_distance_km`, and time-based features like day of the week and time of day for flight and segment events.
+    - **Trajectory-Based Features:** For each segment, it calculates aggregate statistics (min, max, mean, std) for key trajectory variables like `altitude`, `groundspeed`, and `vertical_rate`. It also computes the total distance traveled during the segment (`segment_distance_km`) and the change in altitude (`alt_diff_rev`).
+    - **Flight Phase Features:** The script uses both a custom rule-based method and the `openap` library to classify flight phases. It then calculates the duration and fraction of time spent in each phase (e.g., `phase_duration_cl`, `phase_fraction_cruise`).
+    - **Aircraft Performance and Mass Estimation Features:** It calculates an `estimated_takeoff_mass` based on the aircraft's operating empty weight, estimated payload, and estimated fuel load. It also computes a `seg_avg_burn_rate`, which is a weighted average fuel burn rate for the segment based on the time spent in each flight phase.
+    - **Advanced Features:** The script generates interaction features (e.g., `duration_x_estimated_takeoff_mass`) and polynomial features (e.g., `segment_duration_sq`) to capture more complex, non-linear relationships.
+    This will produce three files featured_data_[stage].parquet in `processed/`.
     ```bash
     python run_pipeline.py prepare_data
     ```
