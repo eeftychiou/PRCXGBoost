@@ -919,7 +919,7 @@ def main():
     logger.info("🔍 DIAGNOSTIC: Verifying data sources...")
 
     # Check rank CSV row count
-    df_test_rank = pd.read_csv('data/augmented_openap_submission_ALL_FLIGHTSrank.csv')
+    df_test_rank = pd.read_csv(RANK_CSV_PATH)
     logger.info(f"Rank CSV total rows: {len(df_test_rank):,}")
     logger.info(f"Rank CSV first 5 flight_ids: {df_test_rank['flight_id'].head().tolist()}")
 

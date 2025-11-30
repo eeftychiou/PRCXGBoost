@@ -99,20 +99,20 @@ WIDEBODY_AIRCRAFT = ['A332', 'A333', 'A343', 'A359', 'A388', 'B744', 'B748',
                      'B763', 'B772', 'B773', 'B77W', 'B788', 'B789']
 
 # File paths
-DATA_PATH = 'data/augmented_openap_correct_mass_ALL_FLIGHTS_final.csv'
+DATA_PATH = 'data/AugmentedDataFromOPENAP/augmented_openap_correct_mass_ALL_FLIGHTS_final.csv'
 APT_PATH = 'data/apt.parquet'
 FLIGHTLIST_PATH = 'data/flightlist_train.parquet'
 FUEL_PATH = 'data/fuel_train.parquet'
-TEST_CSV_PATH = 'data/augmented_openap_submission_ALL_FLIGHTSrank.csv'
+TEST_CSV_PATH = 'data/AugmentedDataFromOPENAP/augmented_openap_submission_ALL_FLIGHTSrank.csv'
 FUEL_RANK_PATH = 'data/fuel_rank_submission.parquet'
 FLIGHTLIST_RANK_PATH = 'data/flightlist_rank.parquet'
 RESULTS_DIR = 'Results'
 
-FEATURED_DATA_TRAIN = 'data/featured_data_mergedFINAL.parquet'
-FEATURED_DATA_TEST = 'data/featured_data_rank_mergedFINAL.parquet'
+FEATURED_DATA_TRAIN = 'data/featured_data_merged.parquet'
+FEATURED_DATA_TEST = 'data/featured_data_rank_merged.parquet'
 
 SELECTED_FEATURES_PATH = 'data/selected_features_sfs3.json'
-SYNTHETIC_PATH = os.path.join(RESULTS_DIR, "synthetic_widebody2.parquet")
+SYNTHETIC_PATH = os.path.join(RESULTS_DIR, "synthetic_widebodyRank.parquet")
 os.makedirs(RESULTS_DIR, exist_ok=True)
 
 log_file = os.path.join(RESULTS_DIR, f'xgboost_top5_models_{datetime.now().strftime("%Y%m%d_%H%M%S")}.log')
