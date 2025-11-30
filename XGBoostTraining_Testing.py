@@ -697,37 +697,37 @@ def main():
     logger.info("PHASE 5: GRID SEARCH FOR OPTIMAL HYPERPARAMETERS")
     logger.info("="*70)
 
-    param_grid = {
-    # Expand tree structure parameters
-    'max_depth': [7, 8, 9],
-    'min_child_weight': [3, 4, 5, 6],
+    # param_grid = {
+    # # Expand tree structure parameters
+    # 'max_depth': [7, 8, 9],
+    # 'min_child_weight': [3, 4, 5, 6],
     
-    # Expand learning parameters
-    'learning_rate': [0.06, 0.065, 0.07, 0.075, 0.08],
-    'n_estimators': [850, 875, 900, 925, 950],
+    # # Expand learning parameters
+    # 'learning_rate': [0.06, 0.065, 0.07, 0.075, 0.08],
+    # 'n_estimators': [850, 875, 900, 925, 950],
     
-    # Fine-grain sampling parameters
-    'subsample': [0.75, 0.775, 0.80, 0.825, 0.85],
-    'colsample_bytree': [0.57, 0.60, 0.625, 0.65, 0.675, 0.70],
+    # # Fine-grain sampling parameters
+    # 'subsample': [0.75, 0.775, 0.80, 0.825, 0.85],
+    # 'colsample_bytree': [0.57, 0.60, 0.625, 0.65, 0.675, 0.70],
     
-    # Regularization spectrum
-    'gamma': [0.02, 0.03, 0.04, 0.05, 0.06],
-    'reg_alpha': [0.005, 0.01, 0.015, 0.02, 0.025, 0.03, 0.04],
-    'reg_lambda': [1.0, 1.25, 1.5, 1.75, 2.0]
-    }
+    # # Regularization spectrum
+    # 'gamma': [0.02, 0.03, 0.04, 0.05, 0.06],
+    # 'reg_alpha': [0.005, 0.01, 0.015, 0.02, 0.025, 0.03, 0.04],
+    # 'reg_lambda': [1.0, 1.25, 1.5, 1.75, 2.0]
+    # }
 
     # this parameters had the best rmse
-    # param_grid = {
-    #     'n_estimators': [900],
-    #     'learning_rate': [0.07],
-    #     'max_depth': [8],
-    #     'subsample': [0.80],
-    #     'colsample_bytree': [0.65],
-    #     'gamma': [0.05],
-    #     'reg_alpha': [0.05],
-    #     'reg_lambda': [1.5],
-    #     'min_child_weight': [4]
-    # }
+    param_grid = {
+        'n_estimators': [900],
+        'learning_rate': [0.07],
+        'max_depth': [8],
+        'subsample': [0.80],
+        'colsample_bytree': [0.65],
+        'gamma': [0.05],
+        'reg_alpha': [0.05],
+        'reg_lambda': [1.5],
+        'min_child_weight': [4]
+    }
 
     # Use RandomizedSearchCV to sample from the grid
     n_iter_search = 200  # Test 200 random combinations

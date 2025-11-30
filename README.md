@@ -179,6 +179,8 @@ Applies RandomizedSearchCV (200 iterations, 5-fold CV) over expanded grid (`max_
 
 The randomized search can be inscreased or decreased based on the user
 
+in both `XGBoostTraining_Testing.py` and `XGBoostTraining_Final.py` the param_grid is commented out and we left the best model parameters, feel free to run the hyperparameter tuning by uncommenting the param_grid
+
 ### Step 4: Model Training
 
 Train the model using the prepared data and the selected features.
@@ -187,7 +189,7 @@ DATA_PATH, APT_PATH, FLIGHTLIST_PATH, FUEL_PATH, TEST_CSV_PATH, FUEL_RANK_PATH, 
 Basically TEST now becomes the FINAL
 Run 
 ```bash
-python XGBoostTraining_Final.py` 
+python XGBoostTraining_Final.py 
 ```
 to load XGBoostTraining_Testing.py imputers, retrains top-10 models on 100% augmented data (original + synthetic), produces feature importance analysis and generates hybrid test predictions combining exact XGBoostTraining_Testing.py rank rows with new final submission rows.
 
