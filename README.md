@@ -21,6 +21,7 @@ PRCXGBoost/
 ├── data/
 │   ├── METARs/               # Raw METAR files downloaded from the web
 │   ├── acPerf/               # Aircraft performance data
+│   ├── AugmentedDataFromOPENAP/# Augmented OpenAP data
 │   ├── prc-2025-datasets/    # Original competition datasets (flight lists, fuel, trajectories)
 │   ├── filtered_trajectories/ # Output of the trajectory filtering stage
 │   ├── interpolated_trajectories/ # Output of the trajectory interpolation stage
