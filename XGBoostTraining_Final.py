@@ -910,9 +910,7 @@ def main():
 
     logger.info(f"[+] Full dataset preprocessed: {X_full_sfs.shape}")
 
-    # Continue with Phase 7 and 8 as in original code...
-    # (Test data loading and final model training)
-    # The rest remains the same as your original code
+
     # ========================================================================
     # PHASE 7: DIAGNOSTIC - Check data sources FIRST
     # ========================================================================
