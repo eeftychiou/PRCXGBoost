@@ -38,14 +38,23 @@ def read_trajectories(f, strategy):
                 dftrafficin[v] = dftrafficin[[v]].mask(dftrafficin[k].isna())
     return dftrafficin
 
-def filter_all_trajectories(strategy):
+def filter_all_trajectories(strategy, split=None):
     input_base_dir = os.path.join(config.DATA_DIR, 'prc-2025-datasets')
     output_base_dir = os.path.join(config.DATA_DIR, 'filtered_trajectories')
-    sub_dirs = ['flights_train', 'flights_rank', 'flights_final']
+    
+    if split:
+        sub_dirs = [f'flights_{split}']
+    else:
+        sub_dirs = ['flights_train', 'flights_rank', 'flights_final']
 
     for sub_dir in sub_dirs:
         input_dir = os.path.join(input_base_dir, sub_dir)
         output_dir = os.path.join(output_base_dir, sub_dir)
+        
+        if not os.path.exists(input_dir):
+            print(f"Warning: Input directory {input_dir} does not exist. Skipping.")
+            continue
+
         os.makedirs(output_dir, exist_ok=True)
 
         trajectory_files = glob.glob(os.path.join(input_dir, '*.parquet'))
@@ -60,15 +69,14 @@ def filter_all_trajectories(strategy):
             df = read_trajectories(file_path, strategy)
             df.to_parquet(output_file_path, index=False)
 
-def main():
+def run(strategy="classic", split=None):
+    filter_all_trajectories(strategy, split=split)
+
+if __name__ == '__main__':
     parser = argparse.ArgumentParser(
         description='filter out measurements that are likely erroneous',
     )
     parser.add_argument("-strategy", default="classic")
+    parser.add_argument("-split", default=None, choices=["train", "rank", "final"])
     args = parser.parse_args()
-    filter_all_trajectories(args.strategy)
-
-
-
-if __name__ == '__main__':
-    main()
+    run(strategy=args.strategy, split=args.split)

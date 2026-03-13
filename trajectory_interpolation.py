@@ -58,7 +58,7 @@ def detect_phases_with_openap(df, file_name):
     df['phase'] = fp.phaselabel()
     return df
 
-def interpolate_trajectories():
+def interpolate_trajectories(test_mode=False, split=None):
     """
     Processes trajectory files, optionally detects phases, injects segment boundaries, 
     interpolates missing values, and saves the processed files.
@@ -68,21 +68,33 @@ def interpolate_trajectories():
     fuel_data_dir = os.path.join(config.DATA_DIR, 'prc-2025-datasets')
 
     logger.info(f"Starting trajectory interpolation process.")
+    if test_mode:
+        logger.info("*** RUNNING IN TEST MODE (sampling 1% of files) ***")
+    
     logger.info(f"Input base directory: {input_base_dir}")
     logger.info(f"Output base directory: {output_base_dir}")
     
-    logger.info("Loading all fuel data to get segment boundaries...")
-    fuel_files = glob.glob(os.path.join(fuel_data_dir, 'fuel_*.parquet'))
+    logger.info("Loading fuel data to get segment boundaries...")
+    if split:
+        fuel_files = glob.glob(os.path.join(fuel_data_dir, f'fuel_{split}*.parquet'))
+    else:
+        fuel_files = glob.glob(os.path.join(fuel_data_dir, 'fuel_*.parquet'))
+        
     if not fuel_files:
-        raise FileNotFoundError("No fuel files found. Cannot inject segment boundaries.")
-    
-    all_fuel_data = pd.concat([pd.read_parquet(f) for f in fuel_files], ignore_index=True)
-    all_fuel_data['start'] = pd.to_datetime(all_fuel_data['start'])
-    all_fuel_data['end'] = pd.to_datetime(all_fuel_data['end'])
-    all_fuel_data['flight_id'] = all_fuel_data['flight_id'].astype(str)
+        logger.warning("No fuel files found. Proceeding without segment boundary injection.")
+        all_fuel_data = pd.DataFrame(columns=['flight_id', 'start', 'end'])
+    else:
+        all_fuel_data = pd.concat([pd.read_parquet(f) for f in fuel_files], ignore_index=True)
+        all_fuel_data['start'] = pd.to_datetime(all_fuel_data['start'])
+        all_fuel_data['end'] = pd.to_datetime(all_fuel_data['end'])
+        all_fuel_data['flight_id'] = all_fuel_data['flight_id'].astype(str)
 
     files_to_process = []
-    sub_dirs = ['flights_train', 'flights_rank', 'flights_final']
+    if split:
+        sub_dirs = [f'flights_{split}']
+    else:
+        sub_dirs = ['flights_train', 'flights_rank', 'flights_final']
+
     for sub_dir in sub_dirs:
         input_dir = os.path.join(input_base_dir, sub_dir)
         if not os.path.exists(input_dir):
@@ -91,6 +103,13 @@ def interpolate_trajectories():
         trajectory_files = glob.glob(os.path.join(input_dir, '*.parquet'))
         for file_path in trajectory_files:
             files_to_process.append((file_path, sub_dir))
+
+    if test_mode and files_to_process:
+        import random
+        num_test = max(min(len(files_to_process), 5), int(len(files_to_process) * 0.01))
+        random.seed(42)
+        files_to_process = random.sample(files_to_process, num_test)
+        logger.info(f"Test mode: Reduced workload to {len(files_to_process)} files.")
 
     columns_to_interpolate = ['altitude', 'groundspeed', 'latitude', 'longitude', 'track', 'vertical_rate']
 
@@ -109,9 +128,6 @@ def interpolate_trajectories():
                 continue
 
             logger.debug(f"Processing {file_name}: {len(df)} rows.")
-            raw_nan_counts = df[columns_to_interpolate].isna().sum()
-            logger.debug(f"Raw NaN counts for {file_name}:\n{raw_nan_counts[raw_nan_counts > 0]}")
-
             df['timestamp'] = pd.to_datetime(df['timestamp'])
 
             flight_segments = all_fuel_data[all_fuel_data['flight_id'] == flight_id]

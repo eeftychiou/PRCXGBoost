@@ -215,5 +215,8 @@ def generate_load_factor_csv():
         logging.error(f"An unexpected error occurred: {e}", exc_info=True)
 
 
-if __name__ == '__main__':
+def run():
     generate_load_factor_csv()
+
+if __name__ == '__main__':
+    run()

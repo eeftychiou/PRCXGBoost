@@ -10,8 +10,9 @@ from bs4 import BeautifulSoup
 import re
 import os
 import logging
-import time
 import pygeomag
+import time
+import config
 
 # --- Setup Logging ---
 log_dir = 'logs'
@@ -25,10 +26,10 @@ logging.basicConfig(level=logging.INFO,
                     ])
 
 # --- Define Paths ---
-apt_file_path = 'data/prc-2025-datasets/apt.parquet'
-train_flights_path = 'data/prc-2025-datasets/flightlist_train.parquet'
-rank_flights_path = 'data/prc-2025-datasets/flightlist_rank.parquet'
-final_flights_path = 'data/prc-2025-datasets/flightlist_final.parquet'
+apt_file_path = config.APT_PARQUET
+train_flights_path = config.FLIGHTLIST_TRAIN
+rank_flights_path = config.FLIGHTLIST_RANK
+final_flights_path = config.FLIGHTLIST_FINAL
 original_apt_file_path = apt_file_path + '.original.parquet'
 HTML_DIR = 'data/htmlfile'  # Directory to save HTML files for debugging
 GEOMAGTIME= 2025.0
@@ -552,7 +553,7 @@ def manual_update_airport(icao_code, data_to_update):
         logging.error(f"Failed to save parquet file after manual update for {icao_code}: {e}")
 
 
-if __name__ == '__main__':
+def run():
     scrape_airport_data()
 
     # Manual update for LTDB
@@ -588,3 +589,6 @@ if __name__ == '__main__':
         'RWY_1_ELEVATION_b': 83,
     }
     manual_update_airport('ZGBH', zgbh_data)
+
+if __name__ == '__main__':
+    run()

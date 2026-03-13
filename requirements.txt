@@ -7,3 +7,10 @@ seaborn
 tqdm
 joblib
 openap
+requests
+beautifulsoup4
+pitot
+pygeomag
+traffic
+pyarrow
+scipy

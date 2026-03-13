@@ -14,106 +14,33 @@ from math import radians, cos, sin, asin, sqrt
 import time
 import json
 import sys
-
+import config
+from tqdm import tqdm
+import matplotlib.pyplot as plt
+import seaborn as sns
 warnings.filterwarnings('ignore')
 
-# Aircraft specifications database
-AIRCRAFT_DATA = {
-    'A19N': {'mtow_kg': 79200, 'oew_kg': 45100, 'mlw_kg': 67400, 'max_fuel_kg': 27200, 'type': 'narrowbody',
-             'wing_area_m2': 122.6, 'cd0': 0.024},
-    'A20N': {'mtow_kg': 79000, 'oew_kg': 45400, 'mlw_kg': 67400, 'max_fuel_kg': 27200, 'type': 'narrowbody',
-             'wing_area_m2': 122.6, 'cd0': 0.024},
-    'A21N': {'mtow_kg': 97000, 'oew_kg': 50300, 'mlw_kg': 79200, 'max_fuel_kg': 32840, 'type': 'narrowbody',
-             'wing_area_m2': 122.6, 'cd0': 0.025},
-    'A318': {'mtow_kg': 68000, 'oew_kg': 39500, 'mlw_kg': 57500, 'max_fuel_kg': 24210, 'type': 'narrowbody',
-             'wing_area_m2': 122.6, 'cd0': 0.025},
-    'A319': {'mtow_kg': 75500, 'oew_kg': 40800, 'mlw_kg': 62500, 'max_fuel_kg': 24210, 'type': 'narrowbody',
-             'wing_area_m2': 122.6, 'cd0': 0.024},
-    'A320': {'mtow_kg': 78000, 'oew_kg': 42400, 'mlw_kg': 66000, 'max_fuel_kg': 27200, 'type': 'narrowbody',
-             'wing_area_m2': 122.6, 'cd0': 0.024},
-    'A321': {'mtow_kg': 93500, 'oew_kg': 48700, 'mlw_kg': 77800, 'max_fuel_kg': 32840, 'type': 'narrowbody',
-             'wing_area_m2': 128.0, 'cd0': 0.025},
-    'A332': {'mtow_kg': 233000, 'oew_kg': 119500, 'mlw_kg': 182000, 'max_fuel_kg': 139090, 'type': 'widebody',
-             'wing_area_m2': 361.6, 'cd0': 0.022},
-    'A333': {'mtow_kg': 242000, 'oew_kg': 123400, 'mlw_kg': 187000, 'max_fuel_kg': 139090, 'type': 'widebody',
-             'wing_area_m2': 361.6, 'cd0': 0.022},
-    'A343': {'mtow_kg': 275000, 'oew_kg': 131000, 'mlw_kg': 192000, 'max_fuel_kg': 155040, 'type': 'widebody',
-             'wing_area_m2': 363.1, 'cd0': 0.023},
-    'A359': {'mtow_kg': 280000, 'oew_kg': 142400, 'mlw_kg': 205000, 'max_fuel_kg': 138000, 'type': 'widebody',
-             'wing_area_m2': 442.0, 'cd0': 0.021},
-    'A388': {'mtow_kg': 575000, 'oew_kg': 277000, 'mlw_kg': 427000, 'max_fuel_kg': 320000, 'type': 'widebody',
-             'wing_area_m2': 845.0, 'cd0': 0.022},
-    'B37M': {'mtow_kg': 82200, 'oew_kg': 45100, 'mlw_kg': 69400, 'max_fuel_kg': 26020, 'type': 'narrowbody',
-             'wing_area_m2': 124.6, 'cd0': 0.023},
-    'B38M': {'mtow_kg': 82200, 'oew_kg': 45100, 'mlw_kg': 69400, 'max_fuel_kg': 26020, 'type': 'narrowbody',
-             'wing_area_m2': 124.6, 'cd0': 0.023},
-    'B39M': {'mtow_kg': 88300, 'oew_kg': 46550, 'mlw_kg': 72350, 'max_fuel_kg': 26020, 'type': 'narrowbody',
-             'wing_area_m2': 124.6, 'cd0': 0.024},
-    'B3XM': {'mtow_kg': 89800, 'oew_kg': 50300, 'mlw_kg': 73940, 'max_fuel_kg': 26020, 'type': 'narrowbody',
-             'wing_area_m2': 127.4, 'cd0': 0.024},
-    'B734': {'mtow_kg': 68000, 'oew_kg': 38300, 'mlw_kg': 56200, 'max_fuel_kg': 26020, 'type': 'narrowbody',
-             'wing_area_m2': 105.4, 'cd0': 0.025},
-    'B737': {'mtow_kg': 70100, 'oew_kg': 39800, 'mlw_kg': 58000, 'max_fuel_kg': 28600, 'type': 'narrowbody',
-             'wing_area_m2': 124.6, 'cd0': 0.024},
-    'B738': {'mtow_kg': 79000, 'oew_kg': 41413, 'mlw_kg': 66360, 'max_fuel_kg': 28600, 'type': 'narrowbody',
-             'wing_area_m2': 124.6, 'cd0': 0.023},
-    'B739': {'mtow_kg': 85100, 'oew_kg': 44676, 'mlw_kg': 70300, 'max_fuel_kg': 30190, 'type': 'narrowbody',
-             'wing_area_m2': 124.6, 'cd0': 0.024},
-    'B744': {'mtow_kg': 412775, 'oew_kg': 178100, 'mlw_kg': 295742, 'max_fuel_kg': 216840, 'type': 'widebody',
-             'wing_area_m2': 541.0, 'cd0': 0.023},
-    'B748': {'mtow_kg': 447700, 'oew_kg': 197130, 'mlw_kg': 312072, 'max_fuel_kg': 243120, 'type': 'widebody',
-             'wing_area_m2': 554.0, 'cd0': 0.022},
-    'B752': {'mtow_kg': 115680, 'oew_kg': 58390, 'mlw_kg': 99800, 'max_fuel_kg': 52300, 'type': 'narrowbody',
-             'wing_area_m2': 185.3, 'cd0': 0.024},
-    'B763': {'mtow_kg': 186880, 'oew_kg': 90010, 'mlw_kg': 145150, 'max_fuel_kg': 91380, 'type': 'widebody',
-             'wing_area_m2': 283.3, 'cd0': 0.023},
-    'B772': {'mtow_kg': 297560, 'oew_kg': 145150, 'mlw_kg': 213180, 'max_fuel_kg': 171170, 'type': 'widebody',
-             'wing_area_m2': 427.8, 'cd0': 0.022},
-    'B773': {'mtow_kg': 351530, 'oew_kg': 167830, 'mlw_kg': 251290, 'max_fuel_kg': 181280, 'type': 'widebody',
-             'wing_area_m2': 427.8, 'cd0': 0.022},
-    'B77W': {'mtow_kg': 351530, 'oew_kg': 167830, 'mlw_kg': 251290, 'max_fuel_kg': 181280, 'type': 'widebody',
-             'wing_area_m2': 427.8, 'cd0': 0.022},
-    'B788': {'mtow_kg': 227930, 'oew_kg': 119950, 'mlw_kg': 172365, 'max_fuel_kg': 126210, 'type': 'widebody',
-             'wing_area_m2': 325.0, 'cd0': 0.021},
-    'B789': {'mtow_kg': 254010, 'oew_kg': 128850, 'mlw_kg': 192775, 'max_fuel_kg': 126370, 'type': 'widebody',
-             'wing_area_m2': 325.0, 'cd0': 0.021},
-    'E145': {'mtow_kg': 22000, 'oew_kg': 12400, 'mlw_kg': 20200, 'max_fuel_kg': 6200, 'type': 'narrowbody',
-             'wing_area_m2': 51.2, 'cd0': 0.027},
-    'E170': {'mtow_kg': 38600, 'oew_kg': 21620, 'mlw_kg': 35990, 'max_fuel_kg': 11187, 'type': 'narrowbody',
-             'wing_area_m2': 72.7, 'cd0': 0.026},
-    'E190': {'mtow_kg': 51800, 'oew_kg': 29540, 'mlw_kg': 47790, 'max_fuel_kg': 15200, 'type': 'narrowbody',
-             'wing_area_m2': 92.5, 'cd0': 0.025},
-    'E195': {'mtow_kg': 52290, 'oew_kg': 29100, 'mlw_kg': 48280, 'max_fuel_kg': 15200, 'type': 'narrowbody',
-             'wing_area_m2': 92.5, 'cd0': 0.026},
-    'E75L': {'mtow_kg': 39380, 'oew_kg': 22010, 'mlw_kg': 36200, 'max_fuel_kg': 10300, 'type': 'narrowbody',
-             'wing_area_m2': 82.0, 'cd0': 0.026},
-    'C550': {'mtow_kg': 9072, 'oew_kg': 5125, 'mlw_kg': 8618, 'max_fuel_kg': 3619, 'type': 'narrowbody',
-             'wing_area_m2': 31.8, 'cd0': 0.028},
-    'GLF6': {'mtow_kg': 45360, 'oew_kg': 24040, 'mlw_kg': 34700, 'max_fuel_kg': 18600, 'type': 'widebody',
-             'wing_area_m2': 94.0, 'cd0': 0.022},
-}
+# Aircraft specifications database - Centralized in config.py
+AIRCRAFT_DATA = config.AIRCRAFT_DATA
+WIDEBODY_AIRCRAFT = config.WIDEBODY_AIRCRAFT
 
-# WIDEBODY AIRCRAFT LIST
-WIDEBODY_AIRCRAFT = ['A332', 'A333', 'A343', 'A359', 'A388', 'B744', 'B748', 
-                     'B763', 'B772', 'B773', 'B77W', 'B788', 'B789']
+# File paths - Centralized in config.py
+DATA_PATH = config.AUGMENTED_FINAL_CSV
+APT_PATH = config.APT_PARQUET
+FLIGHTLIST_PATH = config.FLIGHTLIST_TRAIN
+FUEL_PATH = config.FUEL_TRAIN
+TEST_CSV_PATH = config.AUGMENTED_FINAL_TEST_CSV # Using actual final test set for final training
+RANK_CSV_PATH = config.AUGMENTED_RANK_CSV
+FUEL_RANK_PATH = config.FUEL_RANK
+FLIGHTLIST_RANK_PATH = config.FLIGHTLIST_RANK
+FLIGHTLIST_FINAL_PATH = config.FLIGHTLIST_FINAL
+RESULTS_DIR = config.MODELS_DIR
 
-# File paths
-DATA_PATH = 'data/AugmentedDataFromOPENAP/augmented_openap_correct_mass_ALL_FLIGHTS_final.csv'
-APT_PATH = 'data/apt.parquet'
-FLIGHTLIST_PATH = 'data/flightlist_train.parquet'
-FUEL_PATH = 'data/fuel_train.parquet'
-TEST_CSV_PATH = 'data/AugmentedDataFromOPENAP/augmented_openap_rank_final_ALL_FLIGHTS.csv'
-RANK_CSV_PATH = 'data/AugmentedDataFromOPENAP/augmented_openap_submission_ALL_FLIGHTSrank.csv'
-FUEL_RANK_PATH = 'data/fuel_final_submission.parquet'
-FLIGHTLIST_RANK_PATH = 'data/flightlist_rank.parquet'
-FLIGHTLIST_FINAL_PATH = 'data/flightlist_final.parquet'
-RESULTS_DIR = 'Results'
-
-FEATURED_DATA_TRAIN = 'data/featured_data_train.parquet'
-FEATURED_DATA_RANK = 'data/featured_data_rank.parquet'
-FEATURED_DATA_TEST = 'data/featured_data_final.parquet'
-SYNTHETIC_PATH = os.path.join(RESULTS_DIR, "synthetic_widebody.parquet")
-SELECTED_FEATURES_PATH = 'data/selected_features_sfs.json'
+FEATURED_DATA_TRAIN = os.path.join(config.PROCESSED_DATA_DIR, 'featured_data_train.parquet')
+FEATURED_DATA_RANK = os.path.join(config.PROCESSED_DATA_DIR, 'featured_data_rank.parquet')
+FEATURED_DATA_TEST = os.path.join(config.PROCESSED_DATA_DIR, 'featured_data_final.parquet')
+SYNTHETIC_PATH = config.SYNTHETIC_WIDEBODY_PATH
+SELECTED_FEATURES_PATH = config.SELECTED_FEATURES_PATH
 
 
 os.makedirs(RESULTS_DIR, exist_ok=True)
@@ -175,6 +102,69 @@ def haversine(lon1, lat1, lon2, lat2):
         return c * 6371
     except:
         return np.nan
+
+
+def save_model_plots(model, X_train, y_train, X_val, y_val, features, output_dir, rank_name):
+    """
+    Generates and saves diagnostic plots for the model.
+    """
+    os.makedirs(output_dir, exist_ok=True)
+    plt.style.use('seaborn-v0_8-whitegrid')
+    
+    # 1. Learning Curves (Loss history)
+    results = model.evals_result()
+    if results and 'validation_0' in results:
+        plt.figure(figsize=(10, 6))
+        epochs = len(results['validation_0']['rmse'])
+        x_axis = range(0, epochs)
+        
+        plt.plot(x_axis, results['validation_0']['rmse'], label='Train', color='royalblue')
+        if 'validation_1' in results:
+            plt.plot(x_axis, results['validation_1']['rmse'], label='Val', color='orange')
+            
+        plt.title(f'Learning Curve - {rank_name}')
+        plt.xlabel('Boosting Iterations')
+        plt.ylabel('RMSE (log-scale)')
+        plt.legend()
+        plt.grid(True, alpha=0.3)
+        plt.tight_layout()
+        plt.savefig(os.path.join(output_dir, f'learning_curve_{rank_name}.png'))
+        plt.close()
+
+    # 2. Predicted vs. Actual
+    y_val_orig = np.expm1(y_val)
+    y_pred_log = model.predict(X_val)
+    y_pred_orig = np.expm1(y_pred_log)
+    
+    plt.figure(figsize=(10, 8))
+    plt.scatter(y_val_orig, y_pred_orig, alpha=0.3, color='teal', s=10)
+    
+    # Diagonal line
+    max_val = max(y_val_orig.max(), y_pred_orig.max())
+    plt.plot([0, max_val], [0, max_val], 'r--', lw=2)
+    
+    plt.title(f'Predicted vs Actual - {rank_name}')
+    plt.xlabel('Actual Fuel Consumption (kg)')
+    plt.ylabel('Predicted Fuel Consumption (kg)')
+    plt.grid(True, alpha=0.3)
+    plt.tight_layout()
+    plt.savefig(os.path.join(output_dir, f'predicted_vs_actual_{rank_name}.png'))
+    plt.close()
+
+    # 3. Feature Importance (Top 20)
+    importance = model.feature_importances_
+    sorted_idx = np.argsort(importance)[::-1][:20]
+    
+    plt.figure(figsize=(12, 8))
+    plt.barh(np.array(features)[sorted_idx][::-1], importance[sorted_idx][::-1], color='steelblue')
+    plt.title(f'Top 20 Feature Importance - {rank_name}')
+    plt.xlabel('Relative Importance')
+    plt.grid(True, axis='x', alpha=0.3)
+    plt.tight_layout()
+    plt.savefig(os.path.join(output_dir, f'feature_importance_{rank_name}.png'))
+    plt.close()
+    
+    logger.info(f"Diagnostic plots saved to: {output_dir}")
 
 
 # ============================================================================
@@ -385,14 +375,20 @@ def generate_synthetic_widebody_data_enhanced(df_train, n_synthetic=25000, long_
 
 
 
-def main():
-    FORCE_RERUN_SFS = '--force-sfs' in sys.argv
+def main(gpu_id=0, force_sfs=False, force_synthetic=False):
+    FORCE_RERUN_SFS = force_sfs or '--force-sfs' in sys.argv
+    FORCE_RERUN_SYNTHETIC = force_synthetic or '--force-synthetic' in sys.argv
+    
     if FORCE_RERUN_SFS:
         logger.info("⚠️  Force SFS re-run flag detected - will ignore cached features")
+        
+    if FORCE_RERUN_SYNTHETIC:
+        logger.info("⚠️  Force synthetic data re-run flag detected - will ignore cached synthetic data")
     
     logger.info("="*70)
     logger.info("XGBoost FUEL PREDICTION - TOP 5 MODELS TRAINING")
     logger.info(f"Started at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    logger.info(f"Using GPU device ID: {gpu_id}")
     logger.info("="*70)
 
     # ========================================================================
@@ -503,11 +499,13 @@ def main():
     logger.info("PHASE 1.5: GENERATING ENHANCED SYNTHETIC WIDEBODY DATA")
     logger.info("="*70)
 
-    if os.path.exists(SYNTHETIC_PATH):
+    if os.path.exists(SYNTHETIC_PATH) and not FORCE_RERUN_SYNTHETIC:
         logger.info(f"Loading cached synthetic data from {SYNTHETIC_PATH}")
         df_synthetic = pd.read_parquet(SYNTHETIC_PATH)
         logger.info(f"Loaded {len(df_synthetic)} cached synthetic samples")
     else:
+        if FORCE_RERUN_SYNTHETIC:
+            logger.info("⚠️  Regenerating synthetic data (force rerun)...")
         df_synthetic = generate_synthetic_widebody_data_enhanced(
             df_features,
             n_synthetic=25000,        # Generate 25,000 samples
@@ -556,11 +554,19 @@ def main():
     X_train_imputed = X_train.copy()
     X_val_imputed = X_val.copy()
 
+    # Drop entirely NaN columns to prevent SimpleImputer shape mismatches
+    nan_cols = [col for col in feature_cols_selected if X_train_imputed[col].isna().all()]
+    if nan_cols:
+        logger.info(f"[-] Dropping {len(nan_cols)} columns that are 100% NaN: {nan_cols}")
+        feature_cols_selected = [col for col in feature_cols_selected if col not in nan_cols]
+        X_train_imputed = X_train_imputed.drop(columns=nan_cols)
+        X_val_imputed = X_val_imputed.drop(columns=nan_cols)
+
     numerical_features = []
     categorical_features = []
 
     for col in feature_cols_selected:
-        if X_train_imputed[col].dtype in ['int64', 'float64']:
+        if pd.api.types.is_numeric_dtype(X_train_imputed[col]):
             numerical_features.append(col)
         else:
             categorical_features.append(col)
@@ -617,7 +623,10 @@ def main():
             logger.info("No pre-selected features found. Running SFS...")
         
         base_model_sfs = XGBRegressor(
-            random_state=42, objective='reg:squarederror', tree_method='hist', n_jobs=-1,
+            random_state=42, objective='reg:squarederror', 
+            tree_method='auto',
+            device=f'cuda:{gpu_id}' if gpu_id is not None else 'cpu',
+            n_jobs=-1,
             n_estimators=100, learning_rate=0.1, max_depth=5, subsample=0.8,
             colsample_bytree=0.8, verbosity=0
         )
@@ -627,7 +636,7 @@ def main():
 
         sfs = SequentialFeatureSelector(
             estimator=base_model_sfs, n_features_to_select='auto',
-            direction='forward', n_jobs=-1, cv=5, scoring='neg_mean_squared_error'
+            direction='forward', n_jobs=1, cv=5, scoring='neg_mean_squared_error'
         )
 
         logger.info("Running SFS (this may take a while)...")
@@ -730,13 +739,25 @@ def main():
     logger.info(f"Testing {n_iter_search} random combinations with 5-fold CV")
     logger.info(f"Total model fits: {n_iter_search * 5} = {n_iter_search * 5:,}")
 
+    # NOTE: Running hyperparameter search entirely on CPU. 
+    # joblib.loky multiprocessing + CUDA context sharing causes thrust::system_error: cudaErrorIllegalAddress
     base_xgb = XGBRegressor(
         random_state=42,
         objective='reg:squarederror',
         tree_method='hist',
-        n_jobs=-1,
+        device='cpu',
+        n_jobs=-1,  # Safe to parallelize CPU threads
         verbosity=0
     )
+
+    # Ensure data is C-contiguous and free of Inf for stable GPU access
+    X_train_sfs = np.ascontiguousarray(X_train_sfs)
+    X_val_sfs = np.ascontiguousarray(X_val_sfs)
+    
+    if np.isinf(X_train_sfs).any() or np.isinf(X_val_sfs).any():
+        logger.warning("⚠️  Inf values detected in features! Clipping to finite range.")
+        X_train_sfs = np.nan_to_num(X_train_sfs, nan=0.0, posinf=1e10, neginf=-1e10)
+        X_val_sfs = np.nan_to_num(X_val_sfs, nan=0.0, posinf=1e10, neginf=-1e10)
 
     random_search = RandomizedSearchCV(
         estimator=base_xgb,
@@ -746,7 +767,7 @@ def main():
         cv=5,
         verbose=2,
         random_state=42,
-        n_jobs=-1,
+        n_jobs=1,
         return_train_score=True
     )
 
@@ -801,13 +822,14 @@ def main():
 
     validation_results = []
 
-    for rank, (idx, row) in enumerate(top_10_cv.iterrows(), 1):
+    for rank, (idx, row) in enumerate(tqdm(top_10_cv.iterrows(), total=len(top_10_cv), desc="Training Top Models"), 1):
         logger.info(f"\nEvaluating Model {rank}/10...")
         
         model = XGBRegressor(
             random_state=42,
             objective='reg:squarederror',
-            tree_method='hist',
+            tree_method='auto',
+            device=f'cuda:{gpu_id}' if gpu_id is not None else 'cpu',
             n_jobs=-1,
             verbosity=0,
             **row['params']
@@ -890,7 +912,7 @@ def main():
     logger.info("PHASE 6: PREPROCESSING 100% OF DATA FOR FINAL TRAINING")
     logger.info("="*70)
 
-    X_full_imputed = X_full.copy()
+    X_full_imputed = X_full[feature_cols_selected].copy()
     y_full_log = np.log1p(y_full)
 
     if numerical_features:
@@ -962,25 +984,22 @@ def main():
     selected_features = preprocessors['selected_features']
 
     # ========================================================================
-    # 1. LOAD CORRECT FUEL SUBMISSION DATA FIRST
+    # 1. LOAD SUBMISSION DATA TEMPLATE
     # ========================================================================
     logger.info("🔍 LOADING FUEL SUBMISSION DATA...")
     try:
-        fuel_submission = pd.read_parquet('data/fuel_submission_final.parquet')
-        logger.info("✅ Loaded fuel_submission_final.parquet")
-    except:
-        try:
-            fuel_submission = pd.read_parquet('data/fuel_submission_final.parquet')
-            logger.info("✅ Loaded fuelranksubmission.parquet")
-        except:
-            fuel_submission = pd.read_parquet(FUEL_RANK_PATH)
-            logger.info("✅ Loaded FUEL_RANK_PATH")
+        # For the final evaluation, we need to load the final template for creating the final parquet
+        fuel_submission = pd.read_parquet(config.FUEL_FINAL)
+        logger.info(f"✅ Loaded {os.path.basename(config.FUEL_FINAL)}")
+    except Exception as e:
+        logger.warning(f"⚠️ Could not load final template. Falling back to rank: {e}")
+        fuel_submission = pd.read_parquet(config.FUEL_RANK)
 
     fuel_rank_intervals = fuel_submission[['flight_id', 'idx', 'start', 'end']].rename(columns={'idx': 'interval_idx'})
 
     # Load other data
     rank_csv = pd.read_csv(RANK_CSV_PATH, delimiter=',', low_memory=False)
-    final_csv = pd.read_csv(TEST_CSV_PATH, delimiter=',', low_memory=False)
+    final_csv = pd.read_csv(TEST_CSV_PATH, low_memory=False)
     featured_data_rank = pd.read_parquet(FEATURED_DATA_RANK).rename(columns={'idx': 'interval_idx'})
     featured_data_final = pd.read_parquet(FEATURED_DATA_TEST).rename(columns={'idx': 'interval_idx'})
 
@@ -1067,7 +1086,7 @@ def main():
     if 'idx' in df_test_final.columns:
         df_test_final = df_test_final.rename(columns={'idx': 'interval_idx'})
 
-    df_test_final = df_test_final.merge(fuel_rank_intervals, on=['flight_id', 'interval_idx'], how='left')
+    df_test_final = df_test_final.merge(fuel_rank_intervals, on=['flight_id', 'interval_idx'], how='inner')
     logger.info(f"Final fuel merge: {df_test_final['end'].notna().sum() if 'end' in df_test_final.columns else 0:,} / {len(df_test_final):,} matched")
     df_test_final = df_test_final.merge(featured_data_final, on=['flight_id', 'interval_idx'], how='left')
 
@@ -1204,13 +1223,28 @@ def main():
             random_state=42,
             objective='reg:squarederror',
             tree_method='hist',
+            device='cpu',
             n_jobs=-1,
             verbosity=0,
             **params
         )
         
-        logger.info("Training on 100% of data...")
-        final_model.fit(X_full_sfs, y_full_log)
+        # Train model on 100% of data (using 10% for validation diagnostics)
+        X_train_final, X_val_final, y_train_final, y_val_final = train_test_split(
+            X_full_sfs, y_full_log, test_size=0.1, random_state=42
+        )
+        
+        logger.info("Training with eval_set to capture learning history...")
+        final_model.fit(
+            X_train_final, y_train_final,
+            eval_set=[(X_train_final, y_train_final), (X_val_final, y_val_final)],
+            verbose=False
+        )
+        
+        # Save plots for this model rank
+        diag_dir = os.path.join(RESULTS_DIR, f'xgb_model_rank{rank}')
+        save_model_plots(final_model, X_train_final, y_train_final, X_val_final, y_val_final, 
+                         selected_features, diag_dir, f"rank{rank}")
         
         # ====================================================================
         # FEATURE IMPORTANCE ANALYSIS
@@ -1326,6 +1360,39 @@ def main():
             for param, value in params.items():
                 f.write(f"  {param}: {value}\n")
 
+        # --- NEW CONFORMITY BLOCK FOR evaluate_model.py ---
+        # The evaluate script expects a folder for each model containing:
+        # model.joblib, preprocessor.joblib, selected_features.json
+        if rank == 1:
+            eval_model_dir = os.path.join(RESULTS_DIR, f'xgb_model_rank{rank}')
+            os.makedirs(eval_model_dir, exist_ok=True)
+            
+            # 1. Save model
+            joblib.dump(final_model, os.path.join(eval_model_dir, 'model.joblib'))
+            
+            # 2. Save preprocessor dict
+            # We save the individual components so they can be loaded easily if needed,
+            # but we also save the unified preprocessors object under this folder for standard predict()
+            
+            preprocessor_dict = {
+                'scaler_full': scaler_full,
+                'num_imputer_full': num_imputer_full, 
+                'cat_imputer_full': cat_imputer_full,
+                'cat_encoder_full': cat_encoder_full,
+                'selected_features': selected_features,
+                'selected_mask': selected_mask,
+                'feature_cols_selected': feature_cols_selected,
+                'numerical_features': numerical_features,
+                'categorical_features': categorical_features
+            }
+            joblib.dump(preprocessor_dict, os.path.join(eval_model_dir, 'preprocessor.joblib'))
+            
+            # 3. Save feature list
+            with open(os.path.join(eval_model_dir, 'selected_features.json'), 'w') as f:
+                json.dump(selected_features, f)
+            
+            logger.info(f"[+] Saved evaluation artifacts to {eval_model_dir}")
+
     # ========================================================================
     # PHASE 9: SUMMARY
     # ========================================================================
@@ -1358,5 +1425,8 @@ def main():
     logger.info("="*70)
 
 
+def run(gpu_id=0, force_sfs=False, force_synthetic=False):
+    main(gpu_id=gpu_id, force_sfs=force_sfs, force_synthetic=force_synthetic)
+
 if __name__ == "__main__":
-    main()
+    run()

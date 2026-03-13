@@ -100,19 +100,23 @@ def _get_columns_to_drop():
         'alt_diff_rev_std'
     ]
 
-def correct_timestamps_for_all():
+def correct_timestamps_for_all(split=None):
     """
     Corrects takeoff and landing times for all datasets ('train', 'rank', 'final')
     and saves them to intermediate files. This is the new first step.
     """
     logging.info("--- Starting Timestamp Correction Stage ---")
-    dataset_types = ['train', 'rank', 'final']
-    df_apt = pd.read_parquet(os.path.join(config.DATA_DIR, 'prc-2025-datasets/apt.parquet'))
+    dataset_types = [split] if split else ['train', 'rank', 'final']
+    df_apt = pd.read_parquet(config.APT_PARQUET)
 
     for dataset_type in dataset_types:
         logging.info(f"Correcting timestamps for {dataset_type.upper()} dataset...")
         
-        flightlist_path = os.path.join(config.DATA_DIR, f'prc-2025-datasets/flightlist_{dataset_type}.parquet')
+        flightlist_path = os.path.join(config.BASE_DATASETS_DIR, f'flightlist_{dataset_type}.parquet')
+        if not os.path.exists(flightlist_path):
+            logging.warning(f"Metadata file not found for {dataset_type}: {flightlist_path}. Skipping.")
+            continue
+            
         df_flightlist = pd.read_parquet(flightlist_path)
         
         trajectories_dir = os.path.join(config.INTERPOLATED_TRAJECTORIES_DIR, f'flights_{dataset_type}')
@@ -130,7 +134,7 @@ def correct_timestamps_for_all():
     logging.info("--- Timestamp Correction Stage Complete ---")
 
 
-def prepare_data():
+def prepare_data(split=None):
     """
     Loads, preprocesses, and saves the data for the pipeline.
     This function now starts from the corrected flightlists and uses a flight-keyed weather file.
@@ -146,7 +150,7 @@ def prepare_data():
         logging.warning(f"Processed METAR file not found at {metar_path}. Weather features will not be added. If this is unexpected, please run the 'prepare_metars' stage first.")
         df_metar = None
 
-    dataset_types = ['final', 'train', 'rank']
+    dataset_types = [split] if split else ['final', 'train', 'rank']
 
     for dataset_type in dataset_types:
         logging.info(f"--- Processing {dataset_type.upper()} Dataset ---")
@@ -157,15 +161,31 @@ def prepare_data():
         try:
             corrected_flightlist_path = os.path.join(config.PROCESSED_DATA_DIR, f'corrected_flightlist_{dataset_type}.parquet')
 
+            if not os.path.exists(corrected_flightlist_path):
+                 logging.warning(f"Corrected flightlist not found for {dataset_type}: {corrected_flightlist_path}. Skipping.")
+                 continue
+
             df_flightlist_corrected = pd.read_parquet(corrected_flightlist_path)
 
-            if dataset_type=='final':
+            if dataset_type=='final' and not split:
                 rank_corrected_flightlist_path = os.path.join(config.PROCESSED_DATA_DIR, 'corrected_flightlist_rank.parquet')
-                df_rank_corrected = pd.read_parquet(rank_corrected_flightlist_path)
-                df_flightlist_corrected = pd.concat([df_flightlist_corrected, df_rank_corrected])
+                if os.path.exists(rank_corrected_flightlist_path):
+                    df_rank_corrected = pd.read_parquet(rank_corrected_flightlist_path)
+                    df_flightlist_corrected = pd.concat([df_flightlist_corrected, df_rank_corrected])
 
+            if dataset_type == 'train':
+                fuel_path = config.FUEL_TRAIN
+            elif dataset_type == 'rank':
+                fuel_path = config.FUEL_RANK
+            elif dataset_type == 'final':
+                fuel_path = config.FUEL_FINAL
+            else:
+                fuel_path = os.path.join(config.BASE_DATASETS_DIR, f'fuel_{dataset_type}.parquet')
 
-            fuel_path = os.path.join(config.DATA_DIR, f'prc-2025-datasets/fuel_{dataset_type}.parquet')
+            if not os.path.exists(fuel_path):
+                logging.warning(f"Fuel metadata not found for {dataset_type}: {fuel_path}. Skipping.")
+                continue
+
             df_fuel = pd.read_parquet(fuel_path)
 
             if config.TEST_RUN:
@@ -180,12 +200,12 @@ def prepare_data():
                 logging.info(f"Sampled {dataset_type} flightlist has {df_flightlist_corrected.shape[0]} rows.")
 
             df_ac_perf = pd.read_csv(os.path.join(config.RAW_DATA_DIR, 'acPerfOpenAP.csv'))
-            df_apt = pd.read_parquet(os.path.join(config.DATA_DIR, 'prc-2025-datasets/apt.parquet'))
+            df_apt = pd.read_parquet(config.APT_PARQUET)
             
-            trajectories_dir = os.path.join(config.INTERPOLATED_TRAJECTORIES_DIR, f'flights_final')
+            trajectories_dir = os.path.join(config.INTERPOLATED_TRAJECTORIES_DIR, f'flights_{dataset_type}')
 
-        except FileNotFoundError as e:
-            logging.error(f"Error: A required data file was not found for {dataset_type}. {e}. Please ensure 'correct_timestamps' has been run.")
+        except Exception as e:
+            logging.error(f"Error: A required data file was not found for {dataset_type}. {e}.")
             continue
 
         # --- 2. Merge Data (starting from corrected flightlist) ---
