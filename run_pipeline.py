@@ -90,9 +90,9 @@ def main():
     parser.add_argument("--force-sfs", action="store_true", help="Force rerun of Sequential Feature Selection.")
     parser.add_argument("--force-synthetic", action="store_true", help="Force regeneration of synthetic widebody data.")
     
-    # Custom Path Overrides
-    parser.add_argument("--features", type=str, help="Path to a pre-selected features JSON file.")
-    parser.add_argument("--synthetic_path", type=str, help="Override the path for synthetic data.")
+    # Hyperparameter mode for training
+    parser.add_argument("--mode", choices=["legacy", "grid", "optuna"], default="legacy", 
+                        help="Optimization mode: 'legacy' (default), 'grid', or 'optuna'.")
 
     args = parser.parse_args()
 
@@ -111,7 +111,7 @@ def main():
         regionalLoadFactor.run()
     elif args.stage == "interpolate_trajectories":
         print(f"--- Running Trajectory Interpolation {'(' + args.split + ')' if args.split else ''} ---")
-        trajectory_interpolation.interpolate_trajectories(test_mode=args.test_interpolation, split=args.split)
+        trajectory_interpolation.interpolate_trajectories(test_mode=False, split=args.split)
         print(f"Interpolated trajectories saved to: {config.INTERPOLATED_TRAJECTORIES_DIR}")
     elif args.stage == "correct_timestamps":
         data_preparation.correct_timestamps_for_all(split=args.split)
@@ -126,25 +126,32 @@ def main():
         print("--- Running Data Augmentation (OpenAP) ---")
         AugmentationTraining.run(dataset_type='train', force=args.force)
     elif args.stage == "train_test":
-        print("--- Running XGBoost Training (Testing/Feature Selection) ---")
+        print(f"--- Running XGBoost Training (Testing/Feature Selection) [Mode: {args.mode}] ---")
         best_gpu = get_best_gpu()
         XGBoostTraining_Testing.run(
             gpu_id=best_gpu, 
             force_sfs=args.force_sfs or args.force,
-            force_synthetic=args.force_synthetic or args.force
+            force_synthetic=args.force_synthetic or args.force,
+            opt_mode=args.mode
         )
     elif args.stage == "train_final":
-        print("--- Running Final XGBoost Training ---")
+        print(f"--- Running Final XGBoost Training [Mode: {args.mode}] ---")
         best_gpu = get_best_gpu()
-        XGBoostTraining_Final.run(gpu_id=best_gpu)
+        XGBoostTraining_Final.run(
+            gpu_id=best_gpu, 
+            force_sfs=args.force_sfs or args.force, # In case SFS is needed in final
+            force_synthetic=args.force_synthetic or args.force,
+            opt_mode=args.mode
+        )
     elif args.stage == "train":
         if args.model == "xgb":
-            print("--- Running XGBoost Training (Final) ---")
+            print(f"--- Running XGBoost Training (Final) [Mode: {args.mode}] ---")
             best_gpu = get_best_gpu()
             XGBoostTraining_Final.run(
                 gpu_id=best_gpu,
                 force_sfs=args.force_sfs or args.force,
-                force_synthetic=args.force_synthetic or args.force
+                force_synthetic=args.force_synthetic or args.force,
+                opt_mode=args.mode
             )
         else:
             print(f"ERROR: Model {args.model} is not yet implemented or supported in the unified pipeline.")

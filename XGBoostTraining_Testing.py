@@ -21,6 +21,9 @@ import config
 from tqdm import tqdm
 import matplotlib.pyplot as plt
 import seaborn as sns
+import generate_paper_plots
+
+# Optimization Modes: 'legacy', 'grid', or 'optuna'
 warnings.filterwarnings('ignore')
 
 # Aircraft specifications database - Centralized in config.py
@@ -44,7 +47,7 @@ SELECTED_FEATURES_PATH = config.SELECTED_FEATURES_PATH
 SYNTHETIC_PATH = config.SYNTHETIC_WIDEBODY_PATH
 os.makedirs(RESULTS_DIR, exist_ok=True)
 
-log_file = os.path.join(RESULTS_DIR, f'xgboost_top5_models_{datetime.now().strftime("%Y%m%d_%H%M%S")}.log')
+log_file = os.path.join(RESULTS_DIR, f'test_xgboost_top5_models_{datetime.now().strftime("%Y%m%d_%H%M%S")}.log')
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s [%(levelname)s] %(message)s',
@@ -113,6 +116,14 @@ def save_model_plots(model, X_train, y_train, X_val, y_val, features, output_dir
     # 1. Learning Curves (Loss history)
     results = model.evals_result()
     if results and 'validation_0' in results:
+        # Save raw data to CSV
+        history_df = pd.DataFrame(results['validation_0']).rename(columns={'rmse': 'train_rmse'})
+        if 'validation_1' in results:
+            history_df['val_rmse'] = results['validation_1']['rmse']
+        
+        history_path = os.path.join(output_dir, f'learning_curves_{rank_name}.csv')
+        history_df.to_csv(history_path, index_label='epoch')
+        
         plt.figure(figsize=(10, 6))
         epochs = len(results['validation_0']['rmse'])
         x_axis = range(0, epochs)
@@ -374,9 +385,14 @@ def generate_synthetic_widebody_data_enhanced(df_train, n_synthetic=25000, long_
 
 
 
-def main(gpu_id=0, force_sfs=False, force_synthetic=False):
+def main(gpu_id=0, force_sfs=False, force_synthetic=False, opt_mode='legacy'):
     FORCE_RERUN_SFS = force_sfs or '--force-sfs' in sys.argv
     FORCE_RERUN_SYNTHETIC = force_synthetic or '--force-synthetic' in sys.argv
+    
+    # Update RESULTS_DIR to be mode-specific
+    global RESULTS_DIR
+    RESULTS_DIR = os.path.join(config.MODELS_DIR, opt_mode)
+    os.makedirs(RESULTS_DIR, exist_ok=True)
     
     if FORCE_RERUN_SFS:
         logger.info("⚠️  Force SFS re-run flag detected - will ignore cached features")
@@ -521,12 +537,25 @@ def main(gpu_id=0, force_sfs=False, force_synthetic=False):
 
 
     # Combine original and synthetic data
+    n_real_rows = len(df_features)
     df_features_augmented = pd.concat([df_features, df_synthetic], ignore_index=True)
 
     logger.info(f"\n[+] Original training size: {len(df_features):,}")
     logger.info(f"[+] Synthetic samples added: {len(df_synthetic):,}")
     logger.info(f"[+] Augmented training size: {len(df_features_augmented):,}")
     logger.info(f"[+] Augmentation rate: {len(df_synthetic)/len(df_features)*100:.1f}%")
+
+    # Stash per-row metadata needed for OpenAP comparison (real rows only)
+    is_real_full = np.array([True] * n_real_rows + [False] * len(df_synthetic))
+    # df_features shares the same index as df_raw (post-dropna); use that index to align
+    _real_idx = df_features.index
+    openap_kg_full     = df_raw.loc[_real_idx, 'openap_fuel_kg'].values  if 'openap_fuel_kg' in df_raw.columns else np.full(n_real_rows, np.nan)
+    aircraft_type_full = df_raw.loc[_real_idx, 'aircraft_type'].values   if 'aircraft_type'  in df_raw.columns else np.full(n_real_rows, 'UNK')
+    phase_full         = df_raw.loc[_real_idx, 'phase'].values           if 'phase'          in df_raw.columns else np.full(n_real_rows, 'UNK')
+    # Pad to combined length (synthetic rows get placeholder)
+    openap_kg_full     = np.concatenate([openap_kg_full,     np.full(len(df_synthetic), np.nan)])
+    aircraft_type_full = np.concatenate([aircraft_type_full, np.full(len(df_synthetic), 'UNK')])
+    phase_full         = np.concatenate([phase_full,         np.full(len(df_synthetic), 'UNK')])
 
     # Use augmented data for training
     X_full = df_features_augmented[feature_cols_selected]
@@ -541,12 +570,24 @@ def main(gpu_id=0, force_sfs=False, force_synthetic=False):
     logger.info("PHASE 2: 80/20 TRAIN/VALIDATION SPLIT")
     logger.info("="*70)
 
-    X_train, X_val, y_train, y_val = train_test_split(
-        X_full, y_full, test_size=0.2, random_state=42, shuffle=True
+    all_indices = np.arange(len(X_full))
+    train_indices, val_indices = train_test_split(
+        all_indices, test_size=0.2, random_state=42, shuffle=True
     )
+    X_train = X_full.iloc[train_indices]
+    X_val   = X_full.iloc[val_indices]
+    y_train = y_full[train_indices]
+    y_val   = y_full[val_indices]
+
+    # Val metadata
+    val_is_real        = is_real_full[val_indices]
+    val_openap_kg      = openap_kg_full[val_indices]
+    val_aircraft_type  = aircraft_type_full[val_indices]
+    val_phase          = phase_full[val_indices]
 
     logger.info(f"[+] Training: {len(X_train):,} intervals ({len(X_train)/len(X_full)*100:.1f}%)")
     logger.info(f"[+] Validation: {len(X_val):,} intervals ({len(X_val)/len(X_full)*100:.1f}%)")
+    logger.info(f"[+] Real rows in val set: {val_is_real.sum():,}")
 
     # ========================================================================
     # PHASE 3: PREPROCESSING (FIT ON TRAIN)
@@ -618,8 +659,12 @@ def main(gpu_id=0, force_sfs=False, force_synthetic=False):
         logger.info(f"    Original feature count: {feature_data.get('original_count', 'unknown')}")
         logger.info(f"    SFS took: {feature_data.get('sfs_time_seconds', 0)/60:.2f} minutes")
         
-        # Create mask for selected features
+        # Create mask for selected features (only those present in current data)
         selected_mask = np.array([feat in selected_features for feat in feature_cols_selected])
+        missing = [f for f in selected_features if f not in feature_cols_selected]
+        if missing:
+            logger.warning(f"  ⚠️  {len(missing)} feature(s) from JSON not found in current data and will be skipped: {missing}")
+        selected_features = [feat for feat, s in zip(feature_cols_selected, selected_mask) if s]
         
     else:
         if FORCE_RERUN_SFS:
@@ -702,123 +747,129 @@ def main(gpu_id=0, force_sfs=False, force_synthetic=False):
     X_val_sfs = X_val_scaled[:, selected_mask]
 
     # ========================================================================
-    # PHASE 5: GRID SEARCH FOR HYPERPARAMETERS ON 80% DATA
+    # PHASE 5: HYPERPARAMETER SELECTION
     # ========================================================================
     logger.info("\n" + "="*70)
-    logger.info("PHASE 5: GRID SEARCH FOR OPTIMAL HYPERPARAMETERS")
+    logger.info(f"PHASE 5: HYPERPARAMETER SELECTION (Mode: {opt_mode.upper()})")
     logger.info("="*70)
 
-    # param_grid = {
-    # # Expand tree structure parameters
-    # 'max_depth': [7, 8, 9],
-    # 'min_child_weight': [3, 4, 5, 6],
-    
-    # # Expand learning parameters
-    # 'learning_rate': [0.06, 0.065, 0.07, 0.075, 0.08],
-    # 'n_estimators': [850, 875, 900, 925, 950],
-    
-    # # Fine-grain sampling parameters
-    # 'subsample': [0.75, 0.775, 0.80, 0.825, 0.85],
-    # 'colsample_bytree': [0.57, 0.60, 0.625, 0.65, 0.675, 0.70],
-    
-    # # Regularization spectrum
-    # 'gamma': [0.02, 0.03, 0.04, 0.05, 0.06],
-    # 'reg_alpha': [0.005, 0.01, 0.015, 0.02, 0.025, 0.03, 0.04],
-    # 'reg_lambda': [1.0, 1.25, 1.5, 1.75, 2.0]
-    # }
-
-    # this parameters had the best rmse
-    param_grid = {
-        'n_estimators': [900],
-        'learning_rate': [0.07],
-        'max_depth': [8],
-        'subsample': [0.80],
-        'colsample_bytree': [0.65],
-        'gamma': [0.05],
-        'reg_alpha': [0.05],
-        'reg_lambda': [1.5],
-        'min_child_weight': [4]
+    # 1. Legacy Parameters (previously successful)
+    legacy_params = {
+        'n_estimators': 1455, 
+        'learning_rate': 0.02885922756814833, 
+        'max_depth': 9, 
+        'min_child_weight': 4, 
+        'gamma': 6.24155979490078e-08, 
+        'subsample': 0.9991625118585123, 
+        'colsample_bytree': 0.6701135673048045, 
+        'reg_alpha': 0.004878930563988692, 
+        'reg_lambda': 2.3991563444540384e-08
     }
 
-    # Use RandomizedSearchCV to sample from the grid
-    n_iter_search = 200  # Test 200 random combinations
-    logger.info(f"Parameter space: 3,240,000 possible combinations")
-    logger.info(f"Testing {n_iter_search} random combinations with 5-fold CV")
-    logger.info(f"Total model fits: {n_iter_search * 5} = {n_iter_search * 5:,}")
+    # 2. Grid Parameters (new combination provided by user)
+    grid_params = {
+        'n_estimators': 900,
+        'learning_rate': 0.07,
+        'max_depth': 8,
+        'subsample': 0.80,
+        'colsample_bytree': 0.65,
+        'gamma': 0.05,
+        'reg_alpha': 0.05,
+        'reg_lambda': 1.5,
+        'min_child_weight': 4
+    }
 
-    # NOTE: Running hyperparameter search entirely on CPU. 
-    # joblib.loky multiprocessing + CUDA context sharing causes thrust::system_error: cudaErrorIllegalAddress
-    base_xgb = XGBRegressor(
-        random_state=42,
-        objective='reg:squarederror',
-        tree_method='hist',
-        device='cpu',
-        n_jobs=-1,  # Safe to parallelize CPU threads
-        verbosity=0
-    )
+    if opt_mode == 'optuna':
+        import optuna
+        from sklearn.model_selection import KFold
+        # ... [Optuna Logic below] ...
 
-    # Ensure data is C-contiguous and free of Inf for stable GPU access
-    X_train_sfs = np.ascontiguousarray(X_train_sfs)
-    X_val_sfs = np.ascontiguousarray(X_val_sfs)
-    
-    if np.isinf(X_train_sfs).any() or np.isinf(X_val_sfs).any():
-        logger.warning("⚠️  Inf values detected in features! Clipping to finite range.")
-        X_train_sfs = np.nan_to_num(X_train_sfs, nan=0.0, posinf=1e10, neginf=-1e10)
-        X_val_sfs = np.nan_to_num(X_val_sfs, nan=0.0, posinf=1e10, neginf=-1e10)
+        def objective(trial):
+            params = {
+                'n_estimators': trial.suggest_int('n_estimators', 500, 1500),
+                'learning_rate': trial.suggest_float('learning_rate', 1e-3, 0.1, log=True),
+                'max_depth': trial.suggest_int('max_depth', 4, 12),
+                'min_child_weight': trial.suggest_int('min_child_weight', 1, 10),
+                'gamma': trial.suggest_float('gamma', 1e-8, 1.0, log=True),
+                'subsample': trial.suggest_float('subsample', 0.6, 1.0),
+                'colsample_bytree': trial.suggest_float('colsample_bytree', 0.6, 1.0),
+                'reg_alpha': trial.suggest_float('reg_alpha', 1e-8, 10.0, log=True),
+                'reg_lambda': trial.suggest_float('reg_lambda', 1e-8, 10.0, log=True),
+                'tree_method': 'hist',
+                'device': 'cuda' if gpu_id is not None else 'cpu',
+                'random_state': 42,
+                'n_jobs': -1,
+                'verbosity': 0
+            }
+            
+            kf = KFold(n_splits=3, shuffle=True, random_state=42)
+            rmse_scores = []
+            
+            # Ensure data is C-contiguous
+            X_t_arr = np.ascontiguousarray(X_train_sfs)
+            y_t_arr = np.ascontiguousarray(np.log1p(y_train))
+            
+            for train_idx, val_idx in kf.split(X_t_arr):
+                X_fold_train, X_fold_val = X_t_arr[train_idx], X_t_arr[val_idx]
+                y_fold_train, y_fold_val = y_t_arr[train_idx], y_t_arr[val_idx]
+                
+                model = XGBRegressor(**params)
+                model.fit(X_fold_train, y_fold_train)
+                
+                preds = model.predict(X_fold_val)
+                rmse = np.sqrt(np.mean((y_fold_val - preds) ** 2))
+                rmse_scores.append(rmse)
+            
+            mean_rmse = np.mean(rmse_scores)
+            std_rmse = np.std(rmse_scores)
+            trial.set_user_attr('cv_std', std_rmse)
+            
+            return mean_rmse
 
-    random_search = RandomizedSearchCV(
-        estimator=base_xgb,
-        param_distributions=param_grid,
-        n_iter=n_iter_search,
-        scoring='neg_mean_squared_error',
-        cv=5,
-        verbose=2,
-        random_state=42,
-        n_jobs=1,
-        return_train_score=True
-    )
+        logger.info("Starting Optuna study...")
+        start_time = time.time()
+        optuna.logging.set_verbosity(optuna.logging.WARNING)
+        study = optuna.create_study(direction='minimize')
+        study.optimize(objective, n_trials=50, show_progress_bar=True)
 
-    logger.info("Starting hyperparameter search...")
-    start_time = time.time()
+        elapsed = time.time() - start_time
+        logger.info(f"\n[+] Optuna search completed in {elapsed/60:.2f} minutes")
+        
+        # Save trials
+        trials_df = study.trials_dataframe()
+        trials_path = os.path.join(RESULTS_DIR, 'test_optuna_trials_history.csv')
+        trials_df.to_csv(trials_path, index=False)
 
-    random_search.fit(X_train_sfs, y_train_log)
+        # Extract top 10
+        completed_trials = [t for t in study.trials if t.state == optuna.trial.TrialState.COMPLETE]
+        top_trials = sorted(completed_trials, key=lambda t: t.value)[:10]
+        top_10_cv_data = [{
+            'mean_test_score': -(t.value**2),
+            'std_test_score': t.user_attrs.get('cv_std', 0.0)**2,
+            'params': t.params
+        } for t in top_trials]
+        top_10_cv = pd.DataFrame(top_10_cv_data)
+        
+    elif opt_mode == 'grid':
+        logger.info("[!] Using Manual Grid Hyperparameters as requested.")
+        top_10_cv = pd.DataFrame([{
+            'mean_test_score': -0.0,
+            'std_test_score': 0.0,
+            'params': grid_params
+        }])
+    else:
+        logger.info("[!] Using Legacy Hyperparameters as requested.")
+        top_10_cv = pd.DataFrame([{
+            'mean_test_score': -0.0,
+            'std_test_score': 0.0,
+            'params': legacy_params
+        }])
 
-    elapsed = time.time() - start_time
-    logger.info(f"\n[+] Random search completed in {elapsed/60:.2f} minutes ({elapsed:.0f} seconds)")
-
+    # Clean up and save processed data for plotting script
     X_train_sfs_df = pd.DataFrame(X_train_sfs, columns=selected_features)
     X_val_sfs_df = pd.DataFrame(X_val_sfs, columns=selected_features)
-
-    train_processed_path = os.path.join(RESULTS_DIR, 'X_train_processed.csv')
-    val_processed_path = os.path.join(RESULTS_DIR, 'X_val_processed.csv')
-
-    X_train_sfs_df.to_csv(train_processed_path, index=False)
-    X_val_sfs_df.to_csv(val_processed_path, index=False)
-
-    logger.info(f"[+] Processed training set saved to: {train_processed_path}")
-    logger.info(f"[+] Processed validation set saved to: {val_processed_path}")
-
-    # ========================================================================
-    # EXTRACT TOP 10 MODELS FROM CV RESULTS
-    # ========================================================================
-    logger.info("\n" + "="*70)
-    logger.info("EXTRACTING TOP 10 MODELS FROM RANDOM SEARCH")
-    logger.info("="*70)
-
-    cv_results_df = pd.DataFrame(random_search.cv_results_)
-    cv_results_df = cv_results_df.sort_values('mean_test_score', ascending=False)
-    cv_results_df = cv_results_df.reset_index(drop=True)
-
-    # Get top 10 models from CV
-    top_10_cv = cv_results_df.head(10).copy()
-
-    logger.info("\nTop 10 models from 5-fold CV on training data:")
-    for idx, row in top_10_cv.iterrows():
-        cv_rmse = np.sqrt(-row['mean_test_score'])
-        cv_std = np.sqrt(row['std_test_score'])
-        logger.info(f"\n  CV Rank {idx+1}:")
-        logger.info(f"    CV RMSE = {cv_rmse:.4f} ± {cv_std:.4f} kg")
-        logger.info(f"    Params: {row['params']}")
+    X_train_sfs_df.to_csv(os.path.join(RESULTS_DIR, 'test_X_train_processed.csv'), index=False)
+    X_val_sfs_df.to_csv(os.path.join(RESULTS_DIR, 'test_X_val_processed.csv'), index=False)
 
     # ========================================================================
     # EVALUATE TOP 10 MODELS ON HELD-OUT 20% VALIDATION SET
@@ -911,6 +962,77 @@ def main(gpu_id=0, force_sfs=False, force_synthetic=False):
             f"{row['overfitting_gap']:7.4f} | {row['val_mae']:8.4f} | "
             f"{row['val_r2']:7.4f} |"
         )
+
+    # ========================================================================
+    # OPENAP COMPARISON ON VAL SET (REAL ROWS ONLY, RANK-1 MODEL)
+    # ========================================================================
+    logger.info("\n" + "="*70)
+    logger.info("OPENAP VS XGBOOST COMPARISON (REAL VAL ROWS, RANK-1 MODEL)")
+    logger.info("="*70)
+
+    best_row = results_df.iloc[0]
+    best_model_cmp = XGBRegressor(
+        random_state=42, objective='reg:squarederror',
+        tree_method='hist', device='cpu', n_jobs=-1, verbosity=0,
+        **best_row['params']
+    )
+    best_model_cmp.fit(X_train_sfs, y_train_log)
+    best_val_pred_log = best_model_cmp.predict(X_val_sfs)
+    best_val_pred     = np.maximum(np.expm1(best_val_pred_log), 0.0)
+
+    # Filter to real-only val rows
+    real_mask      = val_is_real
+    y_val_real     = y_val[real_mask]
+    pred_real      = best_val_pred[real_mask]
+    openap_real    = val_openap_kg[real_mask].astype(float)
+    aircraft_real  = val_aircraft_type[real_mask]
+    phase_real     = val_phase[real_mask]
+
+    def _rmse(a, b): return float(np.sqrt(np.mean((np.asarray(a) - np.asarray(b))**2)))
+    def _mae(a, b):  return float(np.mean(np.abs(np.asarray(a) - np.asarray(b))))
+    def _mape(a, b): return float(np.mean(np.abs((np.asarray(a) - np.asarray(b)) / (np.asarray(a) + 1e-8))) * 100)
+
+    logger.info(f"\nReal val rows: {real_mask.sum():,}")
+    logger.info(f"Overall XGB  RMSE={_rmse(y_val_real,pred_real):.2f}  MAE={_mae(y_val_real,pred_real):.2f}  MAPE={_mape(y_val_real,pred_real):.2f}%")
+    valid_oa = ~np.isnan(openap_real)
+    if valid_oa.sum() > 0:
+        logger.info(f"Overall OpenAP RMSE={_rmse(y_val_real[valid_oa],openap_real[valid_oa]):.2f}  MAE={_mae(y_val_real[valid_oa],openap_real[valid_oa]):.2f}")
+
+    logger.info("\n--- Per-Aircraft (sorted by N) ---")
+    ac_rows = []
+    for ac in pd.Series(aircraft_real).value_counts().index:
+        m = aircraft_real == ac
+        if m.sum() < 5:
+            continue
+        yt, yp = y_val_real[m], pred_real[m]
+        yo = openap_real[m]
+        valid = ~np.isnan(yo)
+        oa_rmse = _rmse(yt[valid], yo[valid]) if valid.sum() > 0 else float('nan')
+        ac_rows.append({
+            'aircraft': ac, 'N': int(m.sum()),
+            'mean_actual_kg': float(np.mean(yt)),
+            'xgb_mae': _mae(yt, yp), 'xgb_rmse': _rmse(yt, yp),
+            'xgb_mape_pct': _mape(yt, yp),
+            'xgb_r2': float(1 - np.sum((yt-yp)**2)/np.sum((yt-yt.mean())**2)),
+            'openap_rmse': oa_rmse,
+        })
+        logger.info(f"  {ac:6s} N={m.sum():5d}  XGB RMSE={_rmse(yt,yp):7.1f}  XGB MAE={_mae(yt,yp):6.1f}  MAPE={_mape(yt,yp):5.1f}%  OpenAP RMSE={oa_rmse:.1f}")
+
+    ac_df = pd.DataFrame(ac_rows)
+    ac_csv = os.path.join(RESULTS_DIR, 'openap_vs_xgb_per_aircraft.csv')
+    ac_df.to_csv(ac_csv, index=False)
+    logger.info(f"[+] Saved per-aircraft comparison to {ac_csv}")
+
+    logger.info("\n--- Per-Phase ---")
+    for ph in ['CLIMB', 'CRUISE', 'DESCENT', 'LEVEL']:
+        m = phase_real == ph
+        if m.sum() < 5:
+            continue
+        yt, yp = y_val_real[m], pred_real[m]
+        yo = openap_real[m]
+        valid = ~np.isnan(yo)
+        oa_rmse = _rmse(yt[valid], yo[valid]) if valid.sum() > 0 else float('nan')
+        logger.info(f"  {ph:8s} N={m.sum():5d}  XGB RMSE={_rmse(yt,yp):7.1f}  XGB MAE={_mae(yt,yp):6.1f}  MAPE={_mape(yt,yp):5.1f}%  OpenAP RMSE={oa_rmse:.1f}")
 
     # ========================================================================
     # PHASE 6: PREPROCESS FULL DATASET
@@ -1016,7 +1138,7 @@ def main(gpu_id=0, force_sfs=False, force_synthetic=False):
     logger.info(f"[+] Test data ready: {X_test_sfs.shape}")
 
     X_test_sfs_df = pd.DataFrame(X_test_sfs, columns=selected_features)
-    test_processed_path = os.path.join(RESULTS_DIR, 'X_test_processedTesting.csv')
+    test_processed_path = os.path.join(RESULTS_DIR, 'test_X_test_processed.csv')
     X_test_sfs_df.to_csv(test_processed_path, index=False)
 
     logger.info(f"[+] Processed test set saved to: {test_processed_path}")
@@ -1150,18 +1272,20 @@ def main(gpu_id=0, force_sfs=False, force_synthetic=False):
         submission_df = submission_df[['idx', 'flight_id', 'start', 'end', 'fuel_kg']]
         
         # Save parquet with fastparquet
-        parquet_path = os.path.join(RESULTS_DIR, f'submission_rank{rank}_synthetic_valrmse_{row["val_rmse"]:.4f}.parquet')
+        parquet_path = os.path.join(RESULTS_DIR, f'test_submission_rank{rank}_synthetic_valrmse_{row["val_rmse"]:.4f}.parquet')
         submission_df.to_parquet(parquet_path, index=False, engine='fastparquet')
         logger.info(f"[+] Parquet saved: {parquet_path}")
         
         # Save CSV
-        csv_path = os.path.join(RESULTS_DIR, f'submission_rank{rank}_synthetic_valrmse_{row["val_rmse"]:.4f}.csv')
+        csv_path = os.path.join(RESULTS_DIR, f'test_submission_rank{rank}_synthetic_valrmse_{row["val_rmse"]:.4f}.csv')
         submission_df.to_csv(csv_path, index=False)
         logger.info(f"[+] CSV saved: {csv_path}")
         
         submission_files.append({
             'rank': rank,
             'val_rmse': row['val_rmse'],
+            'val_mae': row.get('val_mae', 0.0),
+            'val_r2': row.get('val_r2', 0.0),
             'train_rmse_100pct': full_rmse,
             'parquet_file': parquet_path,
             'csv_file': csv_path,
@@ -1171,7 +1295,7 @@ def main(gpu_id=0, force_sfs=False, force_synthetic=False):
         })
         
         # Save parameters
-        params_file = os.path.join(RESULTS_DIR, f'parameters_rank{rank}.txt')
+        params_file = os.path.join(RESULTS_DIR, f'test_parameters_rank{rank}.txt')
         with open(params_file, 'w') as f:
             f.write(f"MODEL RANK #{rank}\n")
             f.write("="*70 + "\n\n")
@@ -1187,7 +1311,7 @@ def main(gpu_id=0, force_sfs=False, force_synthetic=False):
         # The evaluate script expects a folder for each model containing:
         # model.joblib, preprocessor.joblib, selected_features.json
         if rank == 1:
-            eval_model_dir = os.path.join(RESULTS_DIR, f'xgb_model_rank{rank}')
+            eval_model_dir = os.path.join(RESULTS_DIR, f'test_xgb_model_rank{rank}')
             os.makedirs(eval_model_dir, exist_ok=True)
             
             # 1. Save model
@@ -1210,11 +1334,17 @@ def main(gpu_id=0, force_sfs=False, force_synthetic=False):
             }
             joblib.dump(preprocessor_dict, os.path.join(eval_model_dir, 'preprocessor.joblib'))
             
-            # 3. Save feature list
             with open(os.path.join(eval_model_dir, 'selected_features.json'), 'w') as f:
                 json.dump(selected_features, f)
             
             logger.info(f"[+] Saved evaluation artifacts to {eval_model_dir}")
+
+            # --- GENERATE PAPER PLOTS ---
+            try:
+                logger.info("--- Generating Paper Plots for Test/FS results ---")
+                generate_paper_plots.run_all(eval_model_dir)
+            except Exception as e:
+                logger.error(f"[-] Failed to generate paper plots: {e}")
 
     joblib.dump({
     'scaler_full': scaler_full,
@@ -1226,7 +1356,7 @@ def main(gpu_id=0, force_sfs=False, force_synthetic=False):
     'feature_cols_selected': feature_cols_selected,
     'numerical_features': numerical_features,
     'categorical_features': categorical_features
-    }, os.path.join(RESULTS_DIR, 'preprocessors_rank.joblib'))
+    }, os.path.join(RESULTS_DIR, 'test_preprocessors_rank.joblib'))
     # ========================================================================
     # PHASE 9: SUMMARY
     # ========================================================================
@@ -1235,7 +1365,7 @@ def main(gpu_id=0, force_sfs=False, force_synthetic=False):
     logger.info("="*70)
 
     summary_df = pd.DataFrame(submission_files)
-    summary_path = os.path.join(RESULTS_DIR, 'top5_models_synthetic_summary.csv')
+    summary_path = os.path.join(RESULTS_DIR, 'test_top5_models_synthetic_summary.csv')
     summary_df.to_csv(summary_path, index=False)
     
     logger.info("\n" + "="*70)
@@ -1259,8 +1389,8 @@ def main(gpu_id=0, force_sfs=False, force_synthetic=False):
     logger.info("="*70)
 
 
-def run(gpu_id=0, force_sfs=False, force_synthetic=False):
-    main(gpu_id=gpu_id, force_sfs=force_sfs, force_synthetic=force_synthetic)
+def run(gpu_id=0, force_sfs=False, force_synthetic=False, opt_mode='legacy'):
+    main(gpu_id=gpu_id, force_sfs=force_sfs, force_synthetic=force_synthetic, opt_mode=opt_mode)
 
 if __name__ == "__main__":
     run()

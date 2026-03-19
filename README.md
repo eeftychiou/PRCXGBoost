@@ -170,28 +170,93 @@ This is particularly useful when you have added new data or want to avoid re-pro
 
 ### Step 4: Machine Learning Training
 
-Follow the two-step training process used in the final submission:
+Follow the two-step training process used for the submission. Both `XGBoostTraining_Test.py` and `XGBoostTraining_Final.py` now include a flexible hyperparameter selection engine.
 
-1.  **Feature Selection & Testing**:
-    Generates synthetic widebody samples, performs Sequential Feature Selection (SFS), and tunes initial hyperparameters.
+1.  **Select Training Mode**:
+    Open the training script (`XGBoostTraining_Final.py` or `XGBoostTraining_Testing.py`) and locate the `OPT_MODE` variable at the start of **Phase 5**. Choose from:
+    - `'legacy'`: Uses the original, high-performance parameters (1455 estimators). **(Default)**
+    - `'grid'`: Uses the refined parameter combination (900 estimators) recently provided.
+    - `'optuna'`: Runs a deep Bayesian search using the Optuna framework.
+
+2.  **Feature Selection & Testing**:
+    Generates synthetic widebody samples, performs Sequential Feature Selection (SFS), and tunes/applies hyperparameters.
     ```bash
     python run_pipeline.py train_test
     ```
 
-2.  **Final Model Training**:
-    Retrains the top 10 models on 100% of the augmented data (original + synthetic) and produces the final submission parquets.
+3.  **Final Model Training**:
+    Retrains the selected models on 100% of the augmented data (original + synthetic) and produces the final submission parquets. It also automatically generates PNG plots and tables for academic reporting.
     ```bash
     python run_pipeline.py train_final
     ```
 
-### Step 5: Evaluation & Submission
-Evaluate the results and generate final leaderboard scores.
-```bash
-python run_pipeline.py evaluate --run_type final
-```
+4.  **Standalone Hyperparameter Tuning (Optuna)**:
+    For isolated, high-intensity Bayesian optimization on a dedicated GPU server without running the full training pipeline, use the standalone script.
+    ```bash
+    python hyperparameter_tuning_optuna.py
+    ```
+
+### Step 5: Evaluation & Submissions
+Evaluation is split into three modes depending on your goal:
+
+1.  **Performance Evaluation (Metrics)**:
+    Calculate RMSE, MAE, and R² scores by evaluating on a fresh validation split of the training data.
+    ```bash
+    python run_pipeline.py evaluate --run_type evaluate
+    ```
+
+2.  **Rank Stage Submission (Testing Phase 1)**:
+    Generate the submission file for the `rank` (historical test) dataset.
+    ```bash
+    python run_pipeline.py evaluate --run_type rank
+    ```
+
+3.  **Final Stage Submission (Testing Phase 2)**:
+    Generate the submission file for the `final` dataset.
+    ```bash
+    python run_pipeline.py evaluate --run_type final
+    ```
+
+- **Academic Plots & Tables Generation**:
+  At the end of standard training, or independently at any time, run the plotting script to parse model artifacts and generate PNG tables (RMSE, MAE, R²) and publication-ready figures for Feature Importance, Parity logic, and Optuna dynamics.
+  ```bash
+  python generate_paper_plots.py
+  ```
+
+- **Baseline CDF Comparison**:
+  ```bash
+  # Compare latest submission against bright-lobster_final
+  python compare_final_parquets.py
+  ```
+
+- **Multi-Model Distribution Comparison**:
+  ```bash
+  # Plot all 4 distributions (Baselines vs Our Models)
+  python compare_all_parquets.py
+  ```
 
 ---
 
-## Configuration (`config.py`)
-Centralizes all aircraft specifications (`AIRCRAFT_DATA`) and data paths. 
--   **`TEST_RUN`**: Set to `True` for debugging on 5% of data.
+---
+
+## Tips for Remote Execution (`screen`)
+
+For long-running training or Optuna searches on a GPU server, it is recommended to use `screen` to prevent the session from terminating if your SSH connection drops.
+
+1.  **Create a new session**:
+    ```bash
+    screen -S prc_training
+    ```
+2.  **Run your script**:
+    ```bash
+    python XGBoostTraining_Final.py
+    ```
+3.  **Detach from the session**: Press `Ctrl + A` followed by `D`.
+4.  **Reattach later**:
+    ```bash
+    screen -r prc_training
+    ```
+5.  **List active screens**:
+    ```bash
+    screen -ls
+    ```

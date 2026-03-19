@@ -140,9 +140,20 @@ def main(run_type='evaluate'):
         logging.error(f"Error: Models directory '{config.MODELS_DIR}' not found. Please train a model first.")
         return
 
-    saved_model_dirs = sorted([d for d in os.listdir(config.MODELS_DIR) if os.path.isdir(os.path.join(config.MODELS_DIR, d)) and (d.startswith('gbr_model') or d.startswith('xgb_model') or d.startswith('rf_model'))])
+    def find_model_dirs(base_dir):
+        """Recursively find model directories containing model.joblib."""
+        model_dirs = []
+        for root, dirs, files in os.walk(base_dir):
+            if 'model.joblib' in files and 'preprocessor.joblib' in files:
+                # Get path relative to MODELS_DIR
+                rel_path = os.path.relpath(root, base_dir)
+                model_dirs.append(rel_path)
+        return sorted(model_dirs)
+
+    saved_model_dirs = find_model_dirs(config.MODELS_DIR)
+    
     if not saved_model_dirs:
-        logging.error("Error: No trained models found in the models directory.")
+        logging.error("Error: No trained models found in the models directory or its subdirectories.")
         return
 
     print("--- Model Selection ---")
@@ -178,29 +189,160 @@ def main(run_type='evaluate'):
         if run_type == 'evaluate':
             logging.info("Running in evaluation mode...")
             
-            data_file = 'featured_data_train_test.parquet' if config.TEST_RUN else 'featured_data_train.parquet'
-            df_full = pd.read_parquet(os.path.join(config.PROCESSED_DATA_DIR, data_file))
+            # --- Mirror training data loading: augmented CSV + featured_data parquet merge ---
+            aug_train_path = config.AUGMENTED_FINAL_CSV
+            featured_train_path = os.path.join(config.PROCESSED_DATA_DIR, 'featured_data_train.parquet')
+            
+            if os.path.exists(aug_train_path):
+                logging.info(f"Loading augmented training CSV: {aug_train_path}")
+                df_full = pd.read_csv(aug_train_path, delimiter=';', low_memory=False)
+                
+                # Merge extended features from parquet if available
+                if os.path.exists(featured_train_path):
+                    logging.info("Merging with featured_data_train.parquet for extended features...")
+                    featured = pd.read_parquet(featured_train_path)
+                    # Rename idx to match augmented CSV convention
+                    if 'idx' in featured.columns and 'interval_idx' not in featured.columns:
+                        featured = featured.rename(columns={'idx': 'interval_idx'})
+                    # Only merge columns not already in df_full
+                    extra_cols = ['flight_id', 'interval_idx'] + [
+                        c for c in featured.columns 
+                        if c not in df_full.columns and c not in ('idx',)
+                    ]
+                    featured_slim = featured[[c for c in extra_cols if c in featured.columns]]
+                    df_full = df_full.merge(featured_slim, on=['flight_id', 'interval_idx'], how='left')
+                    
+                # The augmented CSV uses 'actual_fuel_kg' as the target
+                if 'actual_fuel_kg' in df_full.columns and 'fuel_kg' not in df_full.columns:
+                    df_full = df_full.rename(columns={'actual_fuel_kg': 'fuel_kg'})
+                
+                # --- Compute derived columns that training script builds on-the-fly ---
+                # These are not stored in the augmented CSV but computed from its raw columns
+                if 'alt_avg_ft' not in df_full.columns:
+                    if 'alt_start_ft' in df_full.columns and 'alt_end_ft' in df_full.columns:
+                        df_full['alt_avg_ft'] = (df_full['alt_start_ft'] + df_full['alt_end_ft']) / 2
+                    elif 'alt_end_ft' in df_full.columns:
+                        df_full['alt_avg_ft'] = df_full['alt_end_ft']
+
+                if 'altitude_change_rate' not in df_full.columns:
+                    if 'alt_change_ft' in df_full.columns and 'interval_duration_sec' in df_full.columns:
+                        df_full['altitude_change_rate'] = df_full['alt_change_ft'] / (df_full['interval_duration_sec'] + 1e-6)
+                    else:
+                        df_full['altitude_change_rate'] = 0.0
+
+                if 'great_circle_distance' not in df_full.columns:
+                    # Compute from flightlist origin/dest coords
+                    try:
+                        from math import radians, cos, sin, asin, sqrt
+                        def haversine_eval(lon1, lat1, lon2, lat2):
+                            if any(v is None or (isinstance(v, float) and np.isnan(v)) for v in [lon1, lat1, lon2, lat2]):
+                                return np.nan
+                            R = 6371
+                            lon1, lat1, lon2, lat2 = map(radians, [lon1, lat1, lon2, lat2])
+                            dlon, dlat = lon2 - lon1, lat2 - lat1
+                            a = sin(dlat/2)**2 + cos(lat1) * cos(lat2) * sin(dlon/2)**2
+                            return 2 * R * asin(sqrt(a))
+
+                        apt = pd.read_parquet(config.APT_PARQUET)[['icao', 'longitude', 'latitude']]
+                        flightlist_gcd = pd.read_parquet(config.FLIGHTLIST_TRAIN)[['flight_id', 'origin_icao', 'destination_icao']]
+                        flightlist_gcd = flightlist_gcd.merge(apt.rename(columns={'icao': 'origin_icao', 'longitude': 'origin_lon', 'latitude': 'origin_lat'}), on='origin_icao', how='left')
+                        flightlist_gcd = flightlist_gcd.merge(apt.rename(columns={'icao': 'destination_icao', 'longitude': 'dest_lon', 'latitude': 'dest_lat'}), on='destination_icao', how='left')
+                        flightlist_gcd['great_circle_distance'] = flightlist_gcd.apply(
+                            lambda r: haversine_eval(r.get('origin_lon'), r.get('origin_lat'), r.get('dest_lon'), r.get('dest_lat')), axis=1
+                        )
+                        df_full = df_full.merge(flightlist_gcd[['flight_id', 'great_circle_distance']], on='flight_id', how='left')
+                        logging.info("Computed great_circle_distance from flightlist coordinates.")
+                    except Exception as e:
+                        logging.warning(f"Could not compute great_circle_distance: {e}. Filling with 0.")
+                        df_full['great_circle_distance'] = 0.0
+
+                if 'interval_elapsed_from_flight_start' not in df_full.columns:
+                    if 'start' in df_full.columns and 'end' in df_full.columns:
+                        try:
+                            df_full['_fs'] = pd.to_datetime(df_full['start'], errors='coerce')
+                            df_full['_fe'] = pd.to_datetime(df_full['end'], errors='coerce')
+                            # Group by flight to get the min start (flight start time)
+                            flight_start = df_full.groupby('flight_id')['_fs'].min().rename('_flight_start')
+                            df_full = df_full.merge(flight_start, on='flight_id', how='left')
+                            df_full['interval_elapsed_from_flight_start'] = (df_full['_fe'] - df_full['_flight_start']).dt.total_seconds().fillna(3600) / 3600.0
+                            df_full.drop(columns=['_fs', '_fe', '_flight_start'], inplace=True)
+                        except Exception:
+                            df_full['interval_elapsed_from_flight_start'] = 0.0
+                    else:
+                        df_full['interval_elapsed_from_flight_start'] = 0.0
+
+                if 'end_hour' not in df_full.columns and 'end' in df_full.columns:
+                    df_full['end_hour'] = pd.to_datetime(df_full['end'], errors='coerce').dt.hour.fillna(-1).astype(int)
+            else:
+                logging.warning(f"Augmented CSV not found at {aug_train_path}. Falling back to featured_data_train.parquet")
+                data_file = 'featured_data_train_test.parquet' if config.TEST_RUN else 'featured_data_train.parquet'
+                df_full = pd.read_parquet(os.path.join(config.PROCESSED_DATA_DIR, data_file))
+                
+                # Apply aliases to bridge column naming gap
+                aliases = {
+                    'estimated_takeoff_mass': 'starting_mass_kg',
+                    'seg_groundspeed_mean': 'gs_avg_kts',
+                    'segment_duration': 'interval_duration_sec',
+                    'great_circle_distance_km': 'great_circle_distance',
+                    'seg_vertical_rate_mean': 'vs_avg_fpm',
+                    'seg_altitude_mean': 'alt_avg_ft',
+                }
+                for src, dst in aliases.items():
+                    if src in df_full.columns and dst not in df_full.columns:
+                        df_full[dst] = df_full[src]
+                        
+                # Derived columns
+                if 'alt_avg_ft' not in df_full.columns and 'start_alt_rev' in df_full.columns:
+                    df_full['alt_avg_ft'] = (df_full['start_alt_rev'] + df_full.get('end_alt_rev', df_full['start_alt_rev'])) / 2
+                if 'altitude_change_rate' not in df_full.columns:
+                    diff = df_full.get('alt_diff_rev', df_full.get('alt_change_ft', 0))
+                    dur = df_full.get('interval_duration_sec', 60)
+                    df_full['altitude_change_rate'] = diff / (dur + 1e-6)
+                if 'interval_elapsed_from_flight_start' not in df_full.columns:
+                    df_full['interval_elapsed_from_flight_start'] = 0.0
+
             df_full.dropna(subset=['fuel_kg'], inplace=True)
 
-            X = df_full[feature_cols]
+            # Fill any remaining missing feature columns with 0
+            missing_cols = [col for col in feature_cols if col not in df_full.columns]
+            if missing_cols:
+                logging.warning(f"Filling {len(missing_cols)} missing feature columns with 0: {missing_cols[:5]}")
+                for col in missing_cols:
+                    df_full[col] = 0
+
+            # Determine the FULL pre-SFS feature set the preprocessor was fitted on
+            # This may be different from 'feature_cols' (which is post-SFS)
+            feature_cols_selected_full = preprocessor.get('feature_cols_selected', None)
+            num_feas = preprocessor.get('numerical_features', [])
+            cat_feas = preprocessor.get('categorical_features', [])
+            
+            # Build the full feature column list the preprocessor expects
+            if feature_cols_selected_full:
+                all_preproc_cols = feature_cols_selected_full
+            else:
+                all_preproc_cols = num_feas + cat_feas
+            
+            # Fill any remaining missing preprocessor columns with 0
+            for col in all_preproc_cols:
+                if col not in df_full.columns:
+                    df_full[col] = 0
+
             y = np.log1p(df_full['fuel_kg'])
             
-            # Split data for evaluation
-            X_train, X_val, y_train, y_val, identifiers_train, identifiers_val = train_test_split(
-                X, y, df_full[['flight_id']], test_size=0.2, random_state=42
+            # Split using the full pre-SFS feature set so preprocessor receives all expected columns
+            X_full_preproc = df_full.reindex(columns=all_preproc_cols, fill_value=0)
+            X_train_full, X_val_full, y_train, y_val, identifiers_train, identifiers_val = train_test_split(
+                X_full_preproc, y, df_full[['flight_id']], test_size=0.2, random_state=42
             )
             
-            # Use the loaded preprocessor dictionary to transform the validation set
-            X_val_processed = X_val.copy()
+            # Apply the full preprocessing pipeline
             num_imputer = preprocessor['num_imputer_full']
             cat_imputer = preprocessor['cat_imputer_full']
             cat_encoder = preprocessor['cat_encoder_full']
             scaler      = preprocessor['scaler_full']
             mask        = preprocessor['selected_mask']
-            
-            num_feas = preprocessor.get('numerical_features', [])
-            cat_feas = preprocessor.get('categorical_features', [])
-            
+
+            X_val_processed = X_val_full.copy()
             if num_feas and num_imputer:
                 X_val_processed[num_feas] = num_imputer.transform(X_val_processed[num_feas])
             if cat_feas and cat_imputer:
