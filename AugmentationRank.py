@@ -15,15 +15,6 @@ except:
     HAS_OPENAP = False
     print("⚠️ OpenAP not available!")
 
-print("="*80)
-print("PRC 2025 - OpenAP with TRUE Dynamic Mass (Flight-Level Mass Tracking)")
-print(" Processing ALL 24288 Flight IDs from fuel_rank_submission.parquet")
-print(" OpenAP only for 36 supported aircraft types")
-print(" Unsupported aircraft (A306, etc.) kept with blank OpenAP columns")
-print(" Data Density Metrics Included")
-print(" SUBMISSION MODE - Using flights_rank dataset")
-print("="*80)
-
 # Paths
 DATA_DIR = Path('data')
 RESULTS_DIR = Path('Results/checkpoint_Augmentation_Rank')
@@ -77,43 +68,7 @@ AIRCRAFT_DATA = {
 
 supported_types = list(AIRCRAFT_DATA.keys())
 
-# =============================================================================
-# LOAD DATA & EXTRACT ALL FLIGHT IDs
-# =============================================================================
-
-print("\n[Loading data...]")
-
-fuel_df_raw = pd.read_parquet(DATA_DIR / 'fuel_rank_submission.parquet')
-flightlist_df = pd.read_parquet(DATA_DIR / 'flightlist_rank.parquet')
-
-TARGET_FLIGHTS = fuel_df_raw['flight_id'].unique().tolist()
-print(f" Found {len(TARGET_FLIGHTS)} unique flights in submission dataset")
-
-# Merge - keep ALL rows, no filtering
-fuel_df = fuel_df_raw.merge(flightlist_df[['flight_id', 'aircraft_type']], 
-                            on='flight_id', how='left')
-
-TARGET_FLIGHTS = fuel_df['flight_id'].unique().tolist()
-print(f" Keeping ALL {len(TARGET_FLIGHTS)} flights (including unsupported aircraft)")
-
-fuel_df['start_dt'] = pd.to_datetime(fuel_df['start'])
-fuel_df['end_dt'] = pd.to_datetime(fuel_df['end'])
-
-parquet_files = list((DATA_DIR / 'flights_rank').glob('*.parquet'))
-
-flight_data = {}
-print(f"\n[Loading trajectories from flights_rank...]")
-for file_path in tqdm(parquet_files, desc="Loading flight trajectories"):
-    try:
-        traj = pd.read_parquet(file_path)
-        for flight_id, group in traj.groupby('flight_id'):
-            if flight_id in TARGET_FLIGHTS:
-                group = group.sort_values('timestamp').reset_index(drop=True)
-                flight_data[flight_id] = group
-    except:
-        pass
-
-print(f" Loaded {len(flight_data)} flights with trajectory data\n")
+# (data loading moved inside run())
 
 # =============================================================================
 # UTILITIES (All functions remain the same)
@@ -360,177 +315,214 @@ def estimate_with_openap_correct_mass(aircraft_type, full_traj, interval_traj, i
         return None, str(e)[:150]
 
 # =============================================================================
-# MAIN ANALYSIS
+# RUN PIPELINE STAGE
 # =============================================================================
 
-results = []
-flights_processed = 0
-flights_skipped = 0
-aircraft_errors = {}
-unsupported_aircraft_set = set()
+def run(force=False):
+    """Run OpenAP augmentation for the rank dataset."""
+    output_file = RESULTS_DIR / 'augmented_openap_submission_ALL_FLIGHTSRANK.csv'
+    if output_file.exists() and not force:
+        print(f"\n[✓] Results already exist at {output_file}. Skipping (use --force to rerun).")
+        return
 
-for flight_idx, flight_id in enumerate(TARGET_FLIGHTS):
+    print("="*80)
+    print("PRC 2025 - OpenAP with TRUE Dynamic Mass (Flight-Level Mass Tracking)")
+    print(" Processing ALL 24288 Flight IDs from fuel_rank_submission.parquet")
+    print(" OpenAP only for 36 supported aircraft types")
+    print(" Unsupported aircraft (A306, etc.) kept with blank OpenAP columns")
+    print(" Data Density Metrics Included")
+    print(" SUBMISSION MODE - Using flights_rank dataset")
+    print("="*80)
+
+    print("\n[Loading data...]")
+    fuel_df_raw = pd.read_parquet(DATA_DIR / 'fuel_rank_submission.parquet')
+    flightlist_df = pd.read_parquet(DATA_DIR / 'flightlist_rank.parquet')
+
+    TARGET_FLIGHTS = fuel_df_raw['flight_id'].unique().tolist()
+    print(f" Found {len(TARGET_FLIGHTS)} unique flights in submission dataset")
+
+    fuel_df = fuel_df_raw.merge(flightlist_df[['flight_id', 'aircraft_type']],
+                                on='flight_id', how='left')
+
+    TARGET_FLIGHTS = fuel_df['flight_id'].unique().tolist()
+    print(f" Keeping ALL {len(TARGET_FLIGHTS)} flights (including unsupported aircraft)")
+
+    fuel_df['start_dt'] = pd.to_datetime(fuel_df['start'])
+    fuel_df['end_dt'] = pd.to_datetime(fuel_df['end'])
+
+    parquet_files = list((DATA_DIR / 'flights_rank').glob('*.parquet'))
+
+    flight_data = {}
+    print(f"\n[Loading trajectories from flights_rank...]")
+    for file_path in tqdm(parquet_files, desc="Loading flight trajectories"):
+        try:
+            traj = pd.read_parquet(file_path)
+            for flight_id, group in traj.groupby('flight_id'):
+                if flight_id in TARGET_FLIGHTS:
+                    group = group.sort_values('timestamp').reset_index(drop=True)
+                    flight_data[flight_id] = group
+        except:
+            pass
+
+    print(f" Loaded {len(flight_data)} flights with trajectory data\n")
+
+    results = []
+    flights_processed = 0
+    flights_skipped = 0
+    aircraft_errors = {}
+    unsupported_aircraft_set = set()
+
+    for flight_idx, flight_id in enumerate(TARGET_FLIGHTS):
     print(f"\n{'='*80}")
     print(f"[{flight_idx+1}/{len(TARGET_FLIGHTS)}] FLIGHT: {flight_id}")
     print(f"{'='*80}")
     
-    if flight_id not in flight_data:
-        print("⚠️ No trajectory data")
-        flights_skipped += 1
-        continue
-    
-    full_traj = flight_data[flight_id]
-    flight_info = fuel_df[fuel_df['flight_id'] == flight_id]
-    if len(flight_info) == 0:
-        print("⚠️ No fuel interval data")
-        flights_skipped += 1
-        continue
-    
-    aircraft_type = flight_info['aircraft_type'].iloc[0]
-    print(f"Aircraft: {aircraft_type}")
-    
-    # Check if supported
-    is_supported = aircraft_type in supported_types
-    if not is_supported:
-        unsupported_aircraft_set.add(aircraft_type)
-        print(f"⚠️ UNSUPPORTED - Processing without OpenAP")
-    
-    print(f"Intervals: {len(flight_info)}")
-    
-    for idx, (i, row) in enumerate(flight_info.iterrows()):
-        interval_start = row['start_dt']
-        interval_end = row['end_dt']
-        actual_fuel = row['fuel_kg']
-        interval_duration = (pd.to_datetime(interval_end) - pd.to_datetime(interval_start)).total_seconds()
-        
-        print(f"  Interval {idx+1}/{len(flight_info)}: {actual_fuel:.1f} kg", end=" ")
-        
-        interval_traj = extract_interval_trajectory(full_traj, interval_start, interval_end)
-        data_density = calculate_data_density(interval_traj, interval_duration)
-        missing_data = calculate_missing_data_pct(interval_traj)
-        
-        if len(interval_traj) == 0:
-            phase = 'UNKNOWN'
-            phase_info = {
-                'alt_start_ft': 0, 'alt_end_ft': 0, 'alt_change_ft': 0,
-                'alt_avg_ft': 0, 'gs_avg_kts': 0, 'vs_avg_fpm': 0
-            }
-            interval_traj_interp = pd.DataFrame()
-        else:
-            interval_traj_interp = interpolate_trajectory(interval_traj)
-            phase, phase_info = detect_flight_phase_custom(interval_traj_interp)
-        
-        # Try OpenAP ONLY if supported
-        if is_supported and len(interval_traj_interp) > 0:
-            openap_result, openap_msg = estimate_with_openap_correct_mass(
-                aircraft_type, full_traj, interval_traj_interp, interval_start, phase
-            )
-        else:
-            openap_result, openap_msg = None, f"Unsupported aircraft" if not is_supported else "Empty"
-        
-        if openap_result:
-            openap_fuel = openap_result['total_fuel_kg']
-            openap_error = ((openap_fuel - actual_fuel) / actual_fuel) * 100 if actual_fuel > 0 else 0
-            openap_mae = abs(openap_error)
-            openap_phase = openap_result.get('phase_used', phase)
-            starting_mass = openap_result.get('starting_mass_kg', 0)
-            print(f"| Predicted: {openap_fuel:.1f} kg | Error: {openap_error:+.1f}%")
-        else:
-            openap_fuel = None
-            openap_error = None
-            openap_mae = None
-            openap_phase = phase
-            starting_mass = None
-            print(f"| {openap_msg}")
-            
-            if aircraft_type not in aircraft_errors:
-                aircraft_errors[aircraft_type] = []
-            aircraft_errors[aircraft_type].append(openap_msg)
-        
-        results.append({
-            'flight_id': flight_id,
-            'interval_idx': i,
-            'aircraft': aircraft_type,
-            'phase': phase,
-            'alt_start_ft': phase_info.get('alt_start_ft', 0),
-            'alt_end_ft': phase_info.get('alt_end_ft', 0),
-            'alt_change_ft': phase_info.get('alt_change_ft', 0),
-            'gs_avg_kts': phase_info.get('gs_avg_kts', 0),
-            'vs_avg_fpm': phase_info.get('vs_avg_fpm', 0),
-            'actual_fuel_kg': actual_fuel,
-            'interval_points': len(interval_traj),
-            'interval_duration_sec': interval_duration,
-            'data_points_per_second': data_density['data_points_per_second'],
-            'mean_time_between_points_sec': data_density['mean_time_between_points_sec'],
-            'groundspeed_missing%': missing_data['groundspeed_missing%'],
-            'altitude_missing%': missing_data['altitude_missing%'],
-            'vertical_rate_missing%': missing_data['vertical_rate_missing%'],
-            'total_missing%': missing_data['total_missing%'],
-            'openap_fuel_kg': openap_fuel,
-            'openap_phase_used': openap_phase,
-            'openap_error%': openap_error,
-            'openap_mae%': openap_mae,
-            'openap_status': openap_msg,
-            'starting_mass_kg': starting_mass,
-        })
-    
-    flights_processed += 1
-    
-    if flights_processed % 100 == 0:
-        partial_df = pd.DataFrame(results)
-        partial_df.to_csv(RESULTS_DIR / f'augmented_openap_submission_checkpoint_{flights_processed}.csv', index=False)
-        print(f" Checkpoint: {flights_processed} flights, {len(results)} intervals")
+        if flight_id not in flight_data:
+            print("⚠️ No trajectory data")
+            flights_skipped += 1
+            continue
 
-# =============================================================================
-# RESULTS & SUMMARY
-# =============================================================================
+        full_traj = flight_data[flight_id]
+        flight_info = fuel_df[fuel_df['flight_id'] == flight_id]
+        if len(flight_info) == 0:
+            print("⚠️ No fuel interval data")
+            flights_skipped += 1
+            continue
 
-print(f"\n\n{'='*80}")
-print("RESULTS SUMMARY - ALL Aircraft (OpenAP for supported only)")
-print(f"{'='*80}\n")
+        aircraft_type = flight_info['aircraft_type'].iloc[0]
+        print(f"Aircraft: {aircraft_type}")
 
-print(f"Flights processed: {flights_processed}")
-print(f"Flights skipped: {flights_skipped}")
+        is_supported = aircraft_type in supported_types
+        if not is_supported:
+            unsupported_aircraft_set.add(aircraft_type)
+            print(f"⚠️ UNSUPPORTED - Processing without OpenAP")
 
-results_df = pd.DataFrame(results)
-pd.set_option('display.max_columns', None)
-pd.set_option('display.width', None)
+        print(f"Intervals: {len(flight_info)}")
 
-print(f"Total intervals: {len(results_df)}")
+        for idx, (i, row) in enumerate(flight_info.iterrows()):
+            interval_start = row['start_dt']
+            interval_end = row['end_dt']
+            actual_fuel = row.get('fuel_kg', 0)
+            interval_duration = (pd.to_datetime(interval_end) - pd.to_datetime(interval_start)).total_seconds()
 
-successful_openap = results_df['openap_mae%'].notna().sum()
-print(f"Successful OpenAP: {successful_openap}/{len(results_df)}")
+            print(f"  Interval {idx+1}/{len(flight_info)}: {actual_fuel:.1f} kg", end=" ")
 
-if unsupported_aircraft_set:
-    print(f"\nUnsupported aircraft (OpenAP skipped):")
-    for ac_type in sorted(unsupported_aircraft_set):
-        count = len(results_df[results_df['aircraft'] == ac_type])
-        print(f"  {ac_type}: {count} intervals")
+            interval_traj = extract_interval_trajectory(full_traj, interval_start, interval_end)
+            data_density = calculate_data_density(interval_traj, interval_duration)
+            missing_data = calculate_missing_data_pct(interval_traj)
 
-print(f"\n{'='*80}")
-print("OVERALL STATISTICS")
-print(f"{'='*80}\n")
+            if len(interval_traj) == 0:
+                phase = 'UNKNOWN'
+                phase_info = {
+                    'alt_start_ft': 0, 'alt_end_ft': 0, 'alt_change_ft': 0,
+                    'alt_avg_ft': 0, 'gs_avg_kts': 0, 'vs_avg_fpm': 0
+                }
+                interval_traj_interp = pd.DataFrame()
+            else:
+                interval_traj_interp = interpolate_trajectory(interval_traj)
+                phase, phase_info = detect_flight_phase_custom(interval_traj_interp)
 
-openap_mae = results_df['openap_mae%'].dropna()
+            if is_supported and len(interval_traj_interp) > 0:
+                openap_result, openap_msg = estimate_with_openap_correct_mass(
+                    aircraft_type, full_traj, interval_traj_interp, interval_start, phase
+                )
+            else:
+                openap_result, openap_msg = None, "Unsupported aircraft" if not is_supported else "Empty"
 
-if len(openap_mae) > 0:
-    print(f"OpenAP with TRUE Dynamic Mass (n={len(openap_mae)}/{len(results_df)}):")
-    print(f"  Mean MAE:   {openap_mae.mean():.2f}%")
-    print(f"  Median MAE: {openap_mae.median():.2f}%")
-    print(f"  Std Dev:    {openap_mae.std():.2f}%")
-    print(f"  Range:      {openap_mae.min():.2f}% - {openap_mae.max():.2f}%")
+            if openap_result:
+                openap_fuel = openap_result['total_fuel_kg']
+                openap_error = ((openap_fuel - actual_fuel) / actual_fuel) * 100 if actual_fuel > 0 else 0
+                openap_mae = abs(openap_error)
+                openap_phase = openap_result.get('phase_used', phase)
+                starting_mass = openap_result.get('starting_mass_kg', 0)
+                print(f"| Predicted: {openap_fuel:.1f} kg | Error: {openap_error:+.1f}%")
+            else:
+                openap_fuel = None
+                openap_error = None
+                openap_mae = None
+                openap_phase = phase
+                starting_mass = None
+                print(f"| {openap_msg}")
+                if aircraft_type not in aircraft_errors:
+                    aircraft_errors[aircraft_type] = []
+                aircraft_errors[aircraft_type].append(openap_msg)
 
-print(f"\nRows with OpenAP: {len(openap_mae)}")
-print(f"Rows without OpenAP: {len(results_df) - len(openap_mae)}")
+            results.append({
+                'flight_id': flight_id,
+                'interval_idx': i,
+                'aircraft': aircraft_type,
+                'phase': phase,
+                'alt_start_ft': phase_info.get('alt_start_ft', 0),
+                'alt_end_ft': phase_info.get('alt_end_ft', 0),
+                'alt_change_ft': phase_info.get('alt_change_ft', 0),
+                'gs_avg_kts': phase_info.get('gs_avg_kts', 0),
+                'vs_avg_fpm': phase_info.get('vs_avg_fpm', 0),
+                'actual_fuel_kg': actual_fuel,
+                'interval_points': len(interval_traj),
+                'interval_duration_sec': interval_duration,
+                'data_points_per_second': data_density['data_points_per_second'],
+                'mean_time_between_points_sec': data_density['mean_time_between_points_sec'],
+                'groundspeed_missing%': missing_data['groundspeed_missing%'],
+                'altitude_missing%': missing_data['altitude_missing%'],
+                'vertical_rate_missing%': missing_data['vertical_rate_missing%'],
+                'total_missing%': missing_data['total_missing%'],
+                'openap_fuel_kg': openap_fuel,
+                'openap_phase_used': openap_phase,
+                'openap_error%': openap_error,
+                'openap_mae%': openap_mae,
+                'openap_status': openap_msg,
+                'starting_mass_kg': starting_mass,
+            })
 
-# ============================================================================
-# SAVE RESULTS
-# ============================================================================
+        flights_processed += 1
 
-results_df.to_csv(RESULTS_DIR / 'augmented_openap_submission_ALL_FLIGHTSRANK.csv', index=False)
-print(f"\n Saved: augmented_openap_submission_ALL_FLIGHTS.csv")
-print(f"  Total rows: {len(results_df)}")
+        if flights_processed % 100 == 0:
+            partial_df = pd.DataFrame(results)
+            partial_df.to_csv(RESULTS_DIR / f'augmented_openap_submission_checkpoint_{flights_processed}.csv', index=False)
+            print(f" Checkpoint: {flights_processed} flights, {len(results)} intervals")
 
-print(f"\n{'='*80}")
-print("ANALYSIS COMPLETE ")
-print(f"{'='*80}")
+    print(f"\n\n{'='*80}")
+    print("RESULTS SUMMARY - ALL Aircraft (OpenAP for supported only)")
+    print(f"{'='*80}\n")
+    print(f"Flights processed: {flights_processed}")
+    print(f"Flights skipped: {flights_skipped}")
+
+    results_df = pd.DataFrame(results)
+    pd.set_option('display.max_columns', None)
+    pd.set_option('display.width', None)
+    print(f"Total intervals: {len(results_df)}")
+
+    successful_openap = results_df['openap_mae%'].notna().sum()
+    print(f"Successful OpenAP: {successful_openap}/{len(results_df)}")
+
+    if unsupported_aircraft_set:
+        print(f"\nUnsupported aircraft (OpenAP skipped):")
+        for ac_type in sorted(unsupported_aircraft_set):
+            count = len(results_df[results_df['aircraft'] == ac_type])
+            print(f"  {ac_type}: {count} intervals")
+
+    print(f"\n{'='*80}")
+    print("OVERALL STATISTICS")
+    print(f"{'='*80}\n")
+
+    openap_mae_vals = results_df['openap_mae%'].dropna()
+    if len(openap_mae_vals) > 0:
+        print(f"OpenAP with TRUE Dynamic Mass (n={len(openap_mae_vals)}/{len(results_df)}):")
+        print(f"  Mean MAE:   {openap_mae_vals.mean():.2f}%")
+        print(f"  Median MAE: {openap_mae_vals.median():.2f}%")
+        print(f"  Std Dev:    {openap_mae_vals.std():.2f}%")
+        print(f"  Range:      {openap_mae_vals.min():.2f}% - {openap_mae_vals.max():.2f}%")
+
+    print(f"\nRows with OpenAP: {len(openap_mae_vals)}")
+    print(f"Rows without OpenAP: {len(results_df) - len(openap_mae_vals)}")
+
+    results_df.to_csv(output_file, index=False)
+    print(f"\n✓ Saved: {output_file.name}")
+    print(f"  Total rows: {len(results_df)}")
+    print(f"\n{'='*80}")
+    print("ANALYSIS COMPLETE")
+    print(f"{'='*80}")
+
+
+if __name__ == '__main__':
+    run()

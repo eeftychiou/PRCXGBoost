@@ -8,10 +8,10 @@ This project provides a complete machine learning pipeline to predict fuel consu
 - **Modular Pipeline**: Each stage (data preparation, training, evaluation) is independent and can be run separately.
 - **Rich Data Integration**: Enriches the core dataset with external sources, including airport data, historical weather (METAR) reports, and regional passenger load factor estimates.
 - **Advanced Feature Engineering**: Creates a wide range of features from raw trajectory data, including flight phase detection (taxi, takeoff, climb, cruise, etc.), and physics-informed features using aircraft performance models.
-- **Flexible Model Training**: Supports multiple models (XGBoost, Gradient Boosting, Random Forest).
+- **Flexible Model Training**: Supports XGBoost with multiple hyperparameter optimization modes.
 - **Resource-Optimized Training**: Automatically selects the GPU with the lowest memory usage for training tasks.
 - **Progress Tracking**: Real-time `tqdm` progress bars in all long-running augmentation and training loops for clear ETAs.
-- **Hyperparameter Tuning**: Includes a script to optimize model hyperparameters using `RandomizedSearchCV`.
+- **Hyperparameter Tuning**: Includes a standalone Optuna-based script for deep Bayesian hyperparameter optimization.
 
 ---
 
@@ -21,36 +21,42 @@ This project provides a complete machine learning pipeline to predict fuel consu
 PRCXGBoost/
 │
 ├── data/
-│   ├── METARs/               # Raw METAR files downloaded from the web
-│   ├── acPerf/               # Aircraft performance data
-│   ├── AugmentedDataFromOPENAP/# Augmented OpenAP data
-│   ├── prc-2025-datasets/    # Original competition datasets (flight lists, fuel, trajectories)
-│   ├── filtered_trajectories/ # Output of the trajectory filtering stage
+│   ├── METARs/                    # Raw METAR files downloaded from the web
+│   ├── acPerf/                    # Aircraft performance data (acPerfOpenAP.csv)
+│   ├── AugmentedDataFromOPENAP/   # Pre-generated OpenAP augmentation data (provided in repo)
+│   ├── prc-2025-datasets/         # Original competition datasets (flight lists, fuel, trajectories)
+│   ├── filtered_trajectories/     # Output of the trajectory filtering stage
 │   ├── interpolated_trajectories/ # Output of the trajectory interpolation stage
-│   ├── htmlfile/             # Output directory for all HTML files downloaded from SkyVector
-│   └── processed/            # Output directory for all processed data files
+│   ├── htmlfile/                  # HTML files downloaded from SkyVector for airport enrichment
+│   └── processed/                 # Output directory for all processed data files
 │
-├── logs/                     # Contains log files for all pipeline stages
+├── logs/                          # Contains log files for all pipeline stages
 │
-├── models/                   # Stores trained model artifacts
+├── models/                        # Stores trained model artifacts
 │
-├── AGENTS.md                 # Detailed developer-focused documentation
-├── config.py                 # Main configuration file for paths and settings
-├── download_metars.py        # Script to download raw METAR data
-├── impute_apt.py             # Script to enrich airport data from SkyVector
-├── regionalLoadFactor.py     # Script to estimate passenger load factors
-├── run_pipeline.py           # Main entry point for executing the pipeline
-├── metar_utils.py            # Utility functions for processing METAR data
-├── correct_date.py           # Utilities for correcting timestamps
-├── data_preparation.py       # Main script for the data preparation stage
-├── augment_features.py       # Feature engineering from trajectory data
-├── train_xgb.py              # Example training script for XGBoost
-├── AugmentationRank.py       # Augmentation and data imputation script, openAP fuel calculation and starting mass using the rank data trajectories
-├── AugmentationFinal.py      # Augmentation and data imputation script, openAP fuel calculation and starting mass using the final data trajectories
-├── AugmentationTraining.py   # Augmentation and data imputation script, openAP fuel calculation and starting mass using the training data trajectories
-├── XGBoostTraining_Testing.py  # Example training script for XGBoost and preparation of preprocessors and selected features
-├── XGBoostTraining_Final.py  # Training script for XGBoost for the final submission
-└── README.md                 # This file
+├── AGENTS.md                      # Detailed developer-focused documentation
+├── config.py                      # Main configuration file for paths and settings
+├── run_pipeline.py                # Main entry point for executing the pipeline
+├── download_metars.py             # Script to download raw METAR data
+├── impute_apt.py                  # Script to enrich airport data from SkyVector
+├── regionalLoadFactor.py          # Script to estimate passenger load factors
+├── metar_utils.py                 # Utility functions for processing METAR data
+├── correct_date.py                # Utilities for correcting timestamps
+├── data_preparation.py            # Main script for the data preparation stage
+├── augment_features.py            # Feature engineering from trajectory data
+├── filter_trajs.py                # Trajectory filtering logic
+├── trajectory_interpolation.py    # Trajectory interpolation logic
+├── AugmentationTraining.py        # OpenAP fuel/mass augmentation for the training dataset
+├── AugmentationRank.py            # OpenAP fuel/mass augmentation for the rank dataset
+├── AugmentationFinal.py           # OpenAP fuel/mass augmentation for the final dataset
+├── XGBoostTraining_Testing.py     # Feature selection, preprocessing, and test-training script
+├── XGBoostTraining_Final.py       # Full training script for final submission
+├── hyperparameter_tuning_optuna.py# Standalone Optuna hyperparameter search
+├── evaluate_model.py              # Model evaluation and submission generation
+├── generate_paper_plots.py        # Generates publication-ready figures and tables
+├── compare_final_parquets.py      # Compares latest submission against a baseline
+├── compare_all_parquets.py        # Plots distributions across multiple models/baselines
+└── README.md                      # This file
 ```
 
 ---
@@ -77,78 +83,71 @@ PRCXGBoost/
     ```
     *Note: The trajectory filtering stage relies on the `traffic` package, which is incompatible with newer versions of `pandas`. If you encounter a `DatetimeTZBlock` import error, ensure your pandas version is strictly below 2.2.0 (e.g., `pip install "pandas<2.2.0"`).*
 
-
 ---
 
 ## How to Reproduce Results: A Unified Step-by-Step Guide
 
-The following stages prepare all the necessary data for model training. The entire workflow is now orchestrated through `run_pipeline.py`.
+The following stages prepare all the necessary data for model training. The entire workflow is orchestrated through `run_pipeline.py`.
 
 ### Step 1: Initial Data Acquisition
-These stages only need to be run once to populate the repository with external data.
+These steps only need to be run once to populate the repository with the required data.
 
 1.  **Download the dataset from the PRC website**:
     ```bash
-    # Note: Requires mc (MinIO Client) configured
+    # Note: Requires mc (MinIO Client) configured with the OpenSky credentials
     mc cp opensky/prc-2025-datasets/ data/prc-2025-datasets/
     ```
 
 2.  **Generate Aircraft Performance File**:
-    This step creates the `data/acPerf/acPerfOpenAP.csv` file, which contains detailed aircraft performance and behavioral data. While provided in the repository, you can regenerate it if needed.
-    
-    It scans trajectories to extract aircraft types, enriches them with OpenAP data, and generates a "behavioral signature" for each type.
-    
+    Creates `data/acPerf/acPerfOpenAP.csv`, which contains aircraft performance specifications and behavioral signatures. This file is already provided in the repository — only run this if you need to regenerate it.
+
     ```bash
     python run_pipeline.py setup_ac_perf
     ```
-    
-    *Legacy equivalent:* Runs `extract_aircraft_types.py`, `enrich_aircraft_data.py`, and `create_behavioral_features.py` sequentially.
+
+    *This runs `extract_aircraft_types.py`, `enrich_aircraft_data.py`, and `create_behavioral_features.py` sequentially.*
 
 ### Step 2: Data Enrichment & Preprocessing
 
 1.  **Enrich Airport Data**:
-    Enriches the `apt.parquet` file by scraping detailed airport data from SkyVector (runway lengths, headings, elevation).
+    Scrapes detailed airport information from SkyVector (runway lengths, headings, elevation) and enriches the `apt.parquet` file.
     ```bash
     python run_pipeline.py setup_apt
     ```
 
-2.  **Filter and Interpolate Trajectories**:
-    # Stage 1: Filtering (removes erroneous points)
+2.  **Filter Trajectories**:
+    Removes erroneous data points from the raw trajectory files and saves the cleaned output to `data/filtered_trajectories/`.
+    ```bash
     python run_pipeline.py filter_trajs
-    
-    # Stage 2: Interpolation (fills missing values)
+    ```
+
+3.  **Interpolate Trajectories**:
+    Fills missing values in the filtered trajectory files and saves the result to `data/interpolated_trajectories/`.
+    ```bash
     python run_pipeline.py interpolate_trajectories
+    ```
 
-  ### Running Specific Splits
-You can now run most stages for a specific dataset split (`train`, `rank`, or `final`) using the `--split` argument:
+    > **Tip — Running Specific Splits**: You can run either of the above stages for a single dataset split (`train`, `rank`, or `final`) using the `--split` argument. This is useful when you only need to reprocess one dataset:
+    > ```bash
+    > python run_pipeline.py filter_trajs --split final
+    > python run_pipeline.py interpolate_trajectories --split rank
+    > python run_pipeline.py correct_timestamps --split final
+    > ```
 
-```bash
-# Filter only the final trajectories
-python run_pipeline.py filter_trajs --split final
-
-# Interpolate only the final trajectories
-python run_pipeline.py interpolate_trajectories --split final
-
-# Correct timestamps only for the final dataset
-python run_pipeline.py correct_timestamps --split final
-```
-
-This is particularly useful when you have added new data or want to avoid re-processing existing datasets.
-
-3.  **Calculate Regional Load Factors**:
+4.  **Calculate Regional Load Factors**:
     Estimates passenger load factors based on IATA regions and flight routes to enrich the dataset with payload proxies.
     ```bash
     python run_pipeline.py regional_load_factor
     ```
 
-4.  **Correct Timestamps**:
-    Adjusts takeoff and landing times in the flight lists based on aircraft altitude and standard rates of climb/descent.
+5.  **Correct Timestamps**:
+    Adjusts takeoff and landing times in the flight lists using the interpolated trajectory data.
     ```bash
     python run_pipeline.py correct_timestamps
     ```
 
-4.  **Prepare Weather Data**:
-    Processes raw METAR files into a flight-keyed dataset, decoding phenomenon codes and mapping them to the nearest airport.
+6.  **Prepare Weather Data**:
+    Processes raw METAR files into a single flight-keyed dataset, decoding weather phenomenon codes and mapping them to the nearest airport. This produces `processed/processed_metars.parquet` and only needs to be run once.
     ```bash
     python run_pipeline.py prepare_metars
     ```
@@ -156,92 +155,93 @@ This is particularly useful when you have added new data or want to avoid re-pro
 ### Step 3: Feature Engineering & Augmentation
 
 1.  **Main Data Preparation**:
-    Merges all data sources (flight lists, fuel, performance, airport, weather) and creates the core feature set (featured_data_{stage}.parquet).
+    Merges all data sources (corrected flight lists, fuel data, aircraft performance, airport data, weather) and creates the core feature set files (`featured_data_{stage}.parquet`).
     ```bash
     python run_pipeline.py prepare_data
     ```
 
-2.  **Data Augmentation (Optional)**:
-    Computes physics-based fuel predictions using OpenAP FuelFlow models with dynamic mass tracking.
-    *Note: Pre-generated data is already provided in `data/AugmentedDataFromOPENAP`.*
+2.  **Data Augmentation (OpenAP Physics Features)**:
+
+    > **Note: Pre-generated augmentation data is already provided in `data/AugmentedDataFromOPENAP/` and is committed to the GitHub repository. This step is extremely time-consuming (several hours per dataset split) and should be skipped unless you need to regenerate the data from scratch.**
+
+    The augmentation computes physics-based fuel predictions using OpenAP FuelFlow models with dynamic mass tracking. Use the `--split` flag to run for a specific dataset, or omit it to run all three sequentially:
+
     ```bash
+    # Run all three splits (train, rank, final) in sequence
     python run_pipeline.py augment
+
+    # Or run a specific split to save time
+    python run_pipeline.py augment --split train
+    python run_pipeline.py augment --split rank
+    python run_pipeline.py augment --split final
+    ```
+
+    Each run saves its output to `data/AugmentedDataFromOPENAP/`. **If the pre-generated files already exist, the stage is skipped automatically. Use `--force` to regenerate.**
+
+    ```bash
+    python run_pipeline.py augment --force
     ```
 
 ### Step 4: Machine Learning Training
 
-Follow the two-step training process used for the submission. Both `XGBoostTraining_Test.py` and `XGBoostTraining_Final.py` now include a flexible hyperparameter selection engine.
+The training process follows two sequential steps: a testing/feature-selection run, then a final full-data run. Both scripts support a `--mode` flag to control hyperparameter optimization.
 
-1.  **Select Training Mode**:
-    Open the training script (`XGBoostTraining_Final.py` or `XGBoostTraining_Testing.py`) and locate the `OPT_MODE` variable at the start of **Phase 5**. Choose from:
-    - `'legacy'`: Uses the original, high-performance parameters (1455 estimators). **(Default)**
-    - `'grid'`: Uses the refined parameter combination (900 estimators) recently provided.
-    - `'optuna'`: Runs a deep Bayesian search using the Optuna framework.
+**Available `--mode` options:**
+- `legacy` *(default)*: Uses the original high-performance parameters (1455 estimators).
+- `grid`: Uses a refined parameter combination (900 estimators).
+- `optuna`: Runs a deep Bayesian search using the Optuna framework.
 
-2.  **Feature Selection & Testing**:
-    Generates synthetic widebody samples, performs Sequential Feature Selection (SFS), and tunes/applies hyperparameters.
+1.  **Feature Selection & Test Training**:
+    Generates synthetic widebody samples, performs Sequential Feature Selection (SFS), trains on a validation split, and saves the preprocessors and selected features. Use `--force-sfs` to redo feature selection or `--force-synthetic` to regenerate synthetic samples even if cached versions exist.
     ```bash
     python run_pipeline.py train_test
+
+    # With options:
+    python run_pipeline.py train_test --mode optuna --force-sfs --force-synthetic
     ```
 
-3.  **Final Model Training**:
-    Retrains the selected models on 100% of the augmented data (original + synthetic) and produces the final submission parquets. It also automatically generates PNG plots and tables for academic reporting.
+2.  **Final Model Training**:
+    Retrains the model on 100% of the augmented data (original + synthetic) using the features and preprocessors established in the previous step. Produces the final submission parquets and generates publication-ready plots and tables automatically.
     ```bash
     python run_pipeline.py train_final
+
+    # With options:
+    python run_pipeline.py train_final --mode grid
     ```
 
-4.  **Standalone Hyperparameter Tuning (Optuna)**:
-    For isolated, high-intensity Bayesian optimization on a dedicated GPU server without running the full training pipeline, use the standalone script.
+3.  **Standalone Hyperparameter Tuning (Optuna)**:
+    For isolated, high-intensity Bayesian optimization on a dedicated GPU server without running the full training pipeline.
     ```bash
     python hyperparameter_tuning_optuna.py
     ```
 
 ### Step 5: Evaluation & Submissions
-Evaluation is split into three modes depending on your goal:
 
 1.  **Performance Evaluation (Metrics)**:
-    Calculate RMSE, MAE, and R² scores by evaluating on a fresh validation split of the training data.
+    Calculates RMSE, MAE, and R² scores by evaluating on a fresh validation split of the training data and saves a detailed `evaluation_details.csv`.
     ```bash
     python run_pipeline.py evaluate --run_type evaluate
     ```
 
-2.  **Rank Stage Submission (Testing Phase 1)**:
-    Generate the submission file for the `rank` (historical test) dataset.
+2.  **Rank Stage Submission**:
+    Generates the submission file for the `rank` (historical test) dataset.
     ```bash
     python run_pipeline.py evaluate --run_type rank
     ```
 
-3.  **Final Stage Submission (Testing Phase 2)**:
-    Generate the submission file for the `final` dataset.
+3.  **Final Stage Submission**:
+    Generates the submission file for the `final` dataset.
     ```bash
     python run_pipeline.py evaluate --run_type final
     ```
 
-- **Academic Plots & Tables Generation**:
-  At the end of standard training, or independently at any time, run the plotting script to parse model artifacts and generate PNG tables (RMSE, MAE, R²) and publication-ready figures for Feature Importance, Parity logic, and Optuna dynamics.
-  ```bash
-  python generate_paper_plots.py
   ```
-
-- **Baseline CDF Comparison**:
-  ```bash
-  # Compare latest submission against bright-lobster_final
-  python compare_final_parquets.py
-  ```
-
-- **Multi-Model Distribution Comparison**:
-  ```bash
-  # Plot all 4 distributions (Baselines vs Our Models)
-  python compare_all_parquets.py
-  ```
-
----
 
 ---
 
 ## Tips for Remote Execution (`screen`)
 
-For long-running training or Optuna searches on a GPU server, it is recommended to use `screen` to prevent the session from terminating if your SSH connection drops.
+For long-running training or Optuna searches on a GPU server, use `screen` to prevent the session from terminating if your SSH connection drops.
 
 1.  **Create a new session**:
     ```bash
@@ -249,7 +249,7 @@ For long-running training or Optuna searches on a GPU server, it is recommended 
     ```
 2.  **Run your script**:
     ```bash
-    python XGBoostTraining_Final.py
+    python run_pipeline.py train_final
     ```
 3.  **Detach from the session**: Press `Ctrl + A` followed by `D`.
 4.  **Reattach later**:

@@ -24,6 +24,8 @@ import enrich_aircraft_data
 import create_behavioral_features
 import trajectory_interpolation
 import AugmentationTraining
+import AugmentationRank
+import AugmentationFinal
 import XGBoostTraining_Testing
 import XGBoostTraining_Final
 import metar_utils
@@ -123,8 +125,16 @@ def main():
     elif args.stage == "prepare_data":
         data_preparation.prepare_data(split=args.split)
     elif args.stage == "augment":
-        print("--- Running Data Augmentation (OpenAP) ---")
-        AugmentationTraining.run(dataset_type='train', force=args.force)
+        split = args.split
+        if split in (None, 'train'):
+            print("--- Running Data Augmentation (OpenAP) - Training ---")
+            AugmentationTraining.run(dataset_type='train', force=args.force)
+        if split in (None, 'rank'):
+            print("--- Running Data Augmentation (OpenAP) - Rank ---")
+            AugmentationRank.run(force=args.force)
+        if split in (None, 'final'):
+            print("--- Running Data Augmentation (OpenAP) - Final ---")
+            AugmentationFinal.run(force=args.force)
     elif args.stage == "train_test":
         print(f"--- Running XGBoost Training (Testing/Feature Selection) [Mode: {args.mode}] ---")
         best_gpu = get_best_gpu()
