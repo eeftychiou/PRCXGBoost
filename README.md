@@ -101,7 +101,7 @@ These steps only need to be run once to populate the repository with the require
     ```
 
 2.  **Generate Aircraft Performance File**:
-    Creates `data/acPerf/acPerfOpenAP.csv`, which contains aircraft performance specifications and behavioral signatures. This file is already provided in the repository — only run this if you need to regenerate it.
+    Creates `data/acPerf/acPerfOpenAP.csv`, which contains aircraft performance specifications and behavioral signatures. This file is already provided in the repository  only run this if you need to regenerate it.
 
     ```bash
     python run_pipeline.py setup_ac_perf
@@ -129,7 +129,7 @@ These steps only need to be run once to populate the repository with the require
     python run_pipeline.py interpolate_trajectories
     ```
 
-    > **Tip — Running Specific Splits**: You can run either of the above stages for a single dataset split (`train`, `rank`, or `final`) using the `--split` argument. This is useful when you only need to reprocess one dataset:
+    > **Tip  Running Specific Splits**: You can run either of the above stages for a single dataset split (`train`, `rank`, or `final`) using the `--split` argument. This is useful when you only need to reprocess one dataset:
     > ```bash
     > python run_pipeline.py filter_trajs --split final
     > python run_pipeline.py interpolate_trajectories --split rank
@@ -231,10 +231,10 @@ Addresses the reviewer requirement for isolated validation of each claimed contr
 | Condition | Contribution tested |
 |---|---|
 | Full model | Reference (all features) |
-| No METAR features | C1 — meteorological weather data |
-| No load-factor features | C2 — OD-level load factor & payload estimation |
-| Static MTOW mass | C3 — dynamic per-segment mass tracking |
-| Raw (uncorrected) timestamps | C4 — takeoff/landing timestamp correction |
+| No METAR features | C1  meteorological weather data |
+| No load-factor features | C2  OD-level load factor & payload estimation |
+| Static MTOW mass | C3  dynamic per-segment mass tracking |
+| Raw (uncorrected) timestamps | C4  takeoff/landing timestamp correction |
 
 Results are saved to `processed/ablation_contributions_results.csv`.
 
