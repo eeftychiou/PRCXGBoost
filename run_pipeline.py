@@ -28,6 +28,8 @@ import AugmentationRank
 import AugmentationFinal
 import XGBoostTraining_Testing
 import XGBoostTraining_Final
+import train_baselines
+import ablation_contributions
 import metar_utils
 import data_preparation
 import data_profiler
@@ -72,9 +74,9 @@ def main():
     # Main pipeline stages
     parser.add_argument("stage", choices=[
         "profile_data", "setup_ac_perf", "filter_trajs", "regional_load_factor",
-        "interpolate_trajectories", "correct_timestamps", "prepare_metars", 
-        "setup_apt", "prepare_data", "augment", "train_test", "train_final", 
-        "train", "evaluate"
+        "interpolate_trajectories", "correct_timestamps", "prepare_metars",
+        "setup_apt", "prepare_data", "augment", "train_test", "train_final",
+        "train", "train_baselines", "ablate_contributions", "evaluate"
     ], help="The pipeline stage to run.")
     
     # Model selection for the training and tuning stages
@@ -165,6 +167,13 @@ def main():
             )
         else:
             print(f"ERROR: Model {args.model} is not yet implemented or supported in the unified pipeline.")
+    elif args.stage == "train_baselines":
+        print("--- Running Baseline Model Comparison (Ridge, RF, LightGBM, XGBoost) ---")
+        train_baselines.run()
+    elif args.stage == "ablate_contributions":
+        print("--- Running Contribution Ablation Study (C1–C4) ---")
+        best_gpu = get_best_gpu()
+        ablation_contributions.run(gpu_id=best_gpu)
     elif args.stage == "evaluate":
         evaluate_model.main(run_type=args.run_type)
 

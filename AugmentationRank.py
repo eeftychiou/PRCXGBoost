@@ -373,10 +373,10 @@ def run(force=False):
     unsupported_aircraft_set = set()
 
     for flight_idx, flight_id in enumerate(TARGET_FLIGHTS):
-    print(f"\n{'='*80}")
-    print(f"[{flight_idx+1}/{len(TARGET_FLIGHTS)}] FLIGHT: {flight_id}")
-    print(f"{'='*80}")
-    
+        print(f"\n{'='*80}")
+        print(f"[{flight_idx+1}/{len(TARGET_FLIGHTS)}] FLIGHT: {flight_id}")
+        print(f"{'='*80}")
+
         if flight_id not in flight_data:
             print("⚠️ No trajectory data")
             flights_skipped += 1

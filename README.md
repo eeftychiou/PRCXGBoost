@@ -51,6 +51,8 @@ PRCXGBoost/
 ├── AugmentationFinal.py           # OpenAP fuel/mass augmentation for the final dataset
 ├── XGBoostTraining_Testing.py     # Feature selection, preprocessing, and test-training script
 ├── XGBoostTraining_Final.py       # Full training script for final submission
+├── train_baselines.py             # Trains Ridge, RF, LightGBM, XGBoost baselines for comparison
+├── ablation_contributions.py      # Leave-one-out ablation for METAR, load factor, dynamic mass, timestamp correction
 ├── hyperparameter_tuning_optuna.py# Standalone Optuna hyperparameter search
 ├── evaluate_model.py              # Model evaluation and submission generation
 ├── generate_paper_plots.py        # Generates publication-ready figures and tables
@@ -214,6 +216,36 @@ The training process follows two sequential steps: a testing/feature-selection r
     ```bash
     python hyperparameter_tuning_optuna.py
     ```
+
+### Step 4.5 (Optional): Baseline Model Comparison
+
+To address reproducibility and provide a fair comparison of model architectures, baseline models can be trained on the exact same data, preprocessing pipeline, and train/val split as the XGBoost model. This trains Ridge Regression, Random Forest, LightGBM, and XGBoost (with the legacy reference parameters) on the SFS-selected feature set, then writes per-model metrics (RMSE, MAE, MAPE, R²) to `models/baselines/baseline_comparison.csv`.
+
+```bash
+python run_pipeline.py train_baselines
+```
+### Step 4.6 (Optional): Contribution Ablation Study
+
+Addresses the reviewer requirement for isolated validation of each claimed contribution. Trains one XGBoost model per condition (same hyperparameters, same 80/20 split, same preprocessing) and reports the ΔMAE when each contribution is removed:
+
+| Condition | Contribution tested |
+|---|---|
+| Full model | Reference (all features) |
+| No METAR features | C1 — meteorological weather data |
+| No load-factor features | C2 — OD-level load factor & payload estimation |
+| Static MTOW mass | C3 — dynamic per-segment mass tracking |
+| Raw (uncorrected) timestamps | C4 — takeoff/landing timestamp correction |
+
+Results are saved to `processed/ablation_contributions_results.csv`.
+
+```bash
+python run_pipeline.py ablate_contributions
+
+# Specify a GPU:
+python ablation_contributions.py --gpu 0
+```
+
+> **Prerequisite:** `prepare_metars` and `prepare_data` must have been run so that METAR columns (`dep_*` / `arr_*`) are present in `processed/featured_data_train.parquet`. The corrected flightlist (`processed/corrected_flightlist_train.parquet`) must also exist for the C4 timestamp ablation.
 
 ### Step 5: Evaluation & Submissions
 
