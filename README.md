@@ -98,9 +98,8 @@ These steps only need to be run once to populate the repository with the require
     ```bash
     # Note: Requires mc (MinIO Client) configured with the OpenSky credentials
     mc cp opensky/prc-2025-datasets/ data/prc-2025-datasets/
-
-    Also the datasets are available in zenodo: https://zenodo.org/records/19184662
     ```
+    Alternatively, the datasets are available on [Zenodo](https://zenodo.org/records/19184662).
 
 2.  **Generate Aircraft Performance File**:
     Creates `data/acPerf/acPerfOpenAP.csv`, which contains aircraft performance specifications and behavioral signatures. This file is already provided in the repository  only run this if you need to regenerate it.
