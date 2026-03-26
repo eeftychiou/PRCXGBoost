@@ -12,7 +12,7 @@ import argparse
 import traceback
 import logging
 
-# --- Setup Logging ---
+# Logging configuration
 os.makedirs('logs', exist_ok=True)
 log_file = os.path.join('logs', 'evaluate_model.log')
 logging.basicConfig(level=logging.INFO,
@@ -23,7 +23,7 @@ logging.basicConfig(level=logging.INFO,
                      ])
 
 def load_artifacts_for_prediction(model_dir_path):
-    """Loads artifacts needed for generating new predictions on raw data."""
+    """Artifact loading for inference."""
     model_path = os.path.join(model_dir_path, "model.joblib")
     preprocessor_path = os.path.join(model_dir_path, "preprocessor.joblib")
     features_path = os.path.join(model_dir_path, "selected_features.json")
@@ -40,7 +40,7 @@ def load_artifacts_for_prediction(model_dir_path):
     return model, preprocessor, feature_cols
 
 def load_artifacts_for_evaluation(model_dir_path):
-    """Loads artifacts from a TEST_RUN for evaluation."""
+    """Deprecated: split artifacts no longer used."""
     model_path = os.path.join(model_dir_path, "model.joblib")
     preprocessor_path = os.path.join(model_dir_path, "preprocessor.joblib")
     # In a TEST_RUN, the validation set is not saved, so this function is deprecated.
@@ -66,8 +66,7 @@ def generate_predictions(model, data, preprocessor):
     categorical_features = preprocessor.get('categorical_features', [])
     feature_cols_selected = preprocessor['feature_cols_selected']
     
-    # Ensure data matches the expected columns perfectly
-    # Use reindex to gracefully fill any missing architectural columns with 0
+    # Feature alignment
     X_processed = data.reindex(columns=feature_cols_selected, fill_value=0).copy()
     
     # 1. Imputation
@@ -82,7 +81,7 @@ def generate_predictions(model, data, preprocessor):
     # 2. Scaling
     X_scaled = scaler.transform(X_processed)
     
-    # 3. Feature Selection Mask (SFS)
+    # SFS masking
     X_final = X_scaled[:, selected_mask]
     
     logging.info(f"Data transformed successfully: {X_final.shape}")
@@ -94,7 +93,7 @@ def generate_predictions(model, data, preprocessor):
     return predictions
 
 def evaluate_performance(y_true_orig, y_pred_orig, model_dir_name, model_dir_path, val_identifiers=None):
-    """Calculates and displays performance metrics on the original scale."""
+    """Performance metric calculation."""
     mae = mean_absolute_error(y_true_orig, y_pred_orig)
     rmse = np.sqrt(mean_squared_error(y_true_orig, y_pred_orig))
     r2 = r2_score(y_true_orig, y_pred_orig)
@@ -113,12 +112,12 @@ def evaluate_performance(y_true_orig, y_pred_orig, model_dir_name, model_dir_pat
     })
     
     if val_identifiers is not None:
-        # The indices are aligned from the train_test_split, so a direct concat is correct.
+        # Identifier alignment
         eval_details_df = pd.concat([val_identifiers, eval_details_df], axis=1)
     
     eval_details_path = os.path.join(model_dir_path, "evaluation_details.csv")
-    # Save the dataframe's index, which corresponds to the original featured_data index.
     eval_details_df.index.name = 'original_index'
+    # Plotting
     eval_details_df.to_csv(eval_details_path, index=True)
     logging.info(f"Saved detailed evaluation results to {eval_details_path}")
 
@@ -141,7 +140,7 @@ def main(run_type='evaluate'):
         return
 
     def find_model_dirs(base_dir):
-        """Recursively find model directories containing model.joblib."""
+        """Artifact discovery."""
         model_dirs = []
         for root, dirs, files in os.walk(base_dir):
             if 'model.joblib' in files and 'preprocessor.joblib' in files:
@@ -173,7 +172,7 @@ def main(run_type='evaluate'):
     model_dir_path = os.path.join(config.MODELS_DIR, model_dir_name)
     print(f"\n--- Using model: {model_dir_name} ---")
 
-    # Check for diagnostic plots and notify user
+    # Diagnostic plot check
     if os.path.exists(model_dir_path):
         diag_plots = [f for f in os.listdir(model_dir_path) if f.endswith('.png') and ('learning_curve' in f or 'importance' in f or 'predicted_vs_actual' in f)]
         if diag_plots:
@@ -189,7 +188,7 @@ def main(run_type='evaluate'):
         if run_type == 'evaluate':
             logging.info("Running in evaluation mode...")
             
-            # --- Mirror training data loading: augmented CSV + featured_data parquet merge ---
+            # Training data merge: augmented CSV + parquet
             aug_train_path = config.AUGMENTED_FINAL_CSV
             featured_train_path = os.path.join(config.PROCESSED_DATA_DIR, 'featured_data_train.parquet')
             
@@ -204,7 +203,7 @@ def main(run_type='evaluate'):
                     # Rename idx to match augmented CSV convention
                     if 'idx' in featured.columns and 'interval_idx' not in featured.columns:
                         featured = featured.rename(columns={'idx': 'interval_idx'})
-                    # Only merge columns not already in df_full
+                    # Collision-free join
                     extra_cols = ['flight_id', 'interval_idx'] + [
                         c for c in featured.columns 
                         if c not in df_full.columns and c not in ('idx',)
@@ -216,7 +215,7 @@ def main(run_type='evaluate'):
                 if 'actual_fuel_kg' in df_full.columns and 'fuel_kg' not in df_full.columns:
                     df_full = df_full.rename(columns={'actual_fuel_kg': 'fuel_kg'})
                 
-                # --- Compute derived columns that training script builds on-the-fly ---
+                # Runtime derived features
                 # These are not stored in the augmented CSV but computed from its raw columns
                 if 'alt_avg_ft' not in df_full.columns:
                     if 'alt_start_ft' in df_full.columns and 'alt_end_ft' in df_full.columns:
@@ -329,7 +328,7 @@ def main(run_type='evaluate'):
 
             y = np.log1p(df_full['fuel_kg'])
             
-            # Split using the full pre-SFS feature set so preprocessor receives all expected columns
+            # Pre-SFS split
             X_full_preproc = df_full.reindex(columns=all_preproc_cols, fill_value=0)
             X_train_full, X_val_full, y_train, y_val, identifiers_train, identifiers_val = train_test_split(
                 X_full_preproc, y, df_full[['flight_id']], test_size=0.2, random_state=42
@@ -361,7 +360,7 @@ def main(run_type='evaluate'):
 
         elif run_type in ['rank', 'final']:
             logging.info(f"Running in submission mode for '{run_type}' dataset...")
-            # --- DYNAMIC/ENRICHED DATA LOADING ---
+            # Data loading
             # Try loading fully augmented features first (generated by Aux script)
             # Prioritize the paths defined in config.py
             augmented_data_path = config.AUGMENTED_RANK_CSV if run_type == 'rank' else config.AUGMENTED_FINAL_CSV
@@ -380,8 +379,7 @@ def main(run_type='evaluate'):
             else:
                 raise FileNotFoundError(f"Neither {augmented_data_path} nor {prediction_data_path} exist for submission.")
                 
-            # --- DYNAMIC FEATURE CALCULATION (Fallback) ---
-            # Replicate the feature engineering steps done dynamically if not fully present
+            # Dynamic feature fallback
             logging.info("Checking/Calculating dynamic features...")
             
             if 'alt_avg_ft' not in df_predict.columns:
@@ -435,7 +433,7 @@ def main(run_type='evaluate'):
             submission_df.to_parquet(submission_path, index=False)
             logging.info(f"Submission file for '{run_type}' created at: {submission_path}")
             
-            # --- EVALUATE AGAINST BRIGHT-LOBSTER BASELINE ---
+            # Baseline comparison
             baseline_filename = f"bright-lobster_{run_type}.parquet"
             # Try multiple locations for the baseline
             possible_baseline_paths = [
@@ -454,7 +452,7 @@ def main(run_type='evaluate'):
                 logging.info(f"\n--- Comparing with Baseline: {baseline_path} ---")
                 baseline_df = pd.read_parquet(baseline_path)
                 
-                # Merge rigorously on interval idx and flight_id
+                # Join and validation
                 comparison_df = submission_df.merge(
                     baseline_df[['idx', 'flight_id', 'fuel_kg']], 
                     on=['idx', 'flight_id'], 
@@ -474,7 +472,7 @@ def main(run_type='evaluate'):
                     logging.info(f"Root Mean Squared Difference (RMSE): {rmse:.4f} kg")
                     logging.info(f"Agreement Score (R²): {r2:.4f}\n")
                     
-                    # --- CDF Plot of Absolute Errors ---
+                    # Error CDF
                     abs_errors = np.abs(y_pred - y_base)
                     sorted_errors = np.sort(abs_errors)
                     cdf = np.arange(1, len(sorted_errors) + 1) / len(sorted_errors)
@@ -494,7 +492,7 @@ def main(run_type='evaluate'):
                     plt.close()
                     logging.info(f"CDF plot of absolute errors saved to: {cdf_plot_path}")
                     
-                    # --- CDF Plot for Distribution Comparison ---
+                    # Distribution comparison
                     # (Plotting the CDF of values themselves to check alignment)
                     sorted_pred = np.sort(y_pred)
                     sorted_base = np.sort(y_base)

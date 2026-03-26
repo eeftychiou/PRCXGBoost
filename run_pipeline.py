@@ -2,16 +2,16 @@
 Main entry point for the ML pipeline.
 
 This script allows you to run the different stages of the pipeline:
-- `profile_data`: Performs a deep analysis of all data sources.
-- `interpolate_trajectories`: Interpolates missing values in trajectory files.
-- `correct_timestamps`: Corrects takeoff/landing times using trajectory data.
-- `prepare_metars`: Pre-processes raw METAR data into a clean dataset.
-- `prepare_data`: Preprocesses the raw data and creates introspection files.
-- `train`: Trains a model on the processed data.
-- `evaluate`: Evaluates a trained model or generates a submission file.
-- `setup_ac_perf`: Extracts aircraft types, enriches with OpenAP, and creates behavioral features.
-- `filter_trajs`: Filters raw trajectories using the classic strategy.
-- `regional_load_factor`: Calculates and saves regional passenger load factors.
+- `profile_data`: Statistical analysis of data sources.
+- `interpolate_trajectories`: Trajectory interpolation.
+- `correct_timestamps`: Takeoff/landing time correction.
+- `prepare_metars`: METAR preprocessing.
+- `prepare_data`: Pipeline data preparation.
+- `train`: Model training.
+- `evaluate`: Evaluation and submission generation.
+- `setup_ac_perf`: Aircraft performance enrichment.
+- `filter_trajs`: Trajectory filtering.
+- `regional_load_factor`: Load factor calculation.
 """
 import argparse
 import subprocess
@@ -40,8 +40,7 @@ import regionalLoadFactor
 def get_best_gpu():
     """Returns the index of the GPU with the lowest memory usage."""
     try:
-        # Run nvidia-smi to get memory usage
-        # Format: index, memory.used, memory.total
+        # Query index, used memory, total memory
         result = subprocess.check_output(
             ["nvidia-smi", "--query-gpu=index,memory.used,memory.total", "--format=csv,noheader,nounits"],
             encoding='utf-8'
@@ -65,7 +64,7 @@ def get_best_gpu():
         print(f"--- GPU Selection: Using GPU {best_gpu} (Usage: {min_usage*100:.1f}%) ---")
         return best_gpu
     except Exception:
-        # If nvidia-smi fails (e.g., no NVIDIA GPU), return 0 as default
+        # Default to index 0 on failure
         return 0
 
 def main():
@@ -151,7 +150,7 @@ def main():
         best_gpu = get_best_gpu()
         XGBoostTraining_Final.run(
             gpu_id=best_gpu, 
-            force_sfs=args.force_sfs or args.force, # In case SFS is needed in final
+            force_sfs=args.force_sfs or args.force,
             force_synthetic=args.force_synthetic or args.force,
             opt_mode=args.mode
         )

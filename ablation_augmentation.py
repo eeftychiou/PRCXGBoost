@@ -1,20 +1,6 @@
 """
 Ablation study: effect of synthetic widebody augmentation on validation MAE.
-
-Compares two models trained on the same data:
-  - Model A (baseline): trained on real data only
-  - Model B (augmented): trained on real data + synthetic widebody samples
-
-Both models are evaluated on the SAME real-data-only validation set so that
-the comparison is not contaminated by synthetic rows in the evaluation split.
-
-Results are broken down by:
-  - Overall MAE / RMSE
-  - Narrowbody aircraft segments
-  - Widebody aircraft segments
-
 Output: data/processed/ablation_augmentation_results.csv
-        (read by generate_paper_plots.plot_augmentation_ablation)
 """
 
 import os
@@ -34,7 +20,7 @@ from xgboost import XGBRegressor
 
 import config
 
-# ── Logging ──────────────────────────────────────────────────────────────────
+# Logging
 os.makedirs('logs', exist_ok=True)
 logging.basicConfig(
     level=logging.INFO,
@@ -46,7 +32,7 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-# ── Paths (mirror XGBoostTraining_Final.py) ───────────────────────────────────
+# Paths and Constants
 DATA_PATH          = config.AUGMENTED_FINAL_CSV
 APT_PATH           = config.APT_PARQUET
 FLIGHTLIST_PATH    = config.FLIGHTLIST_TRAIN
@@ -60,8 +46,7 @@ OUTPUT_CSV = os.path.join(config.PROCESSED_DATA_DIR, 'ablation_augmentation_resu
 
 WIDEBODY_AIRCRAFT  = config.WIDEBODY_AIRCRAFT
 
-# Hyperparameters — use the legacy (production) params so the comparison is
-# representative of the model that was actually submitted.
+# Production hyperparameters
 MODEL_PARAMS = {
     'n_estimators': 1455,
     'learning_rate': 0.02885922756814833,
@@ -145,7 +130,7 @@ def preprocess(X_train_df, X_val_df, X_aug_df):
 
     log.info(f"  Numerical: {len(numerical_features)}, Categorical: {len(categorical_features)}")
 
-    # Drop all-NaN columns (fit side)
+    # Feature pruning
     nan_cols = [c for c in numerical_features if X_train_df[c].isna().all()]
     if nan_cols:
         log.info(f"  Dropping all-NaN columns: {nan_cols}")
@@ -165,7 +150,7 @@ def preprocess(X_train_df, X_val_df, X_aug_df):
         X_vl[numerical_features] = num_imp.transform(X_vl[numerical_features])
         X_au[numerical_features] = num_imp.transform(X_au[numerical_features])
 
-    # Categorical imputation + encoding
+    # Categorical pipeline
     if categorical_features:
         cat_imp = SimpleImputer(strategy='most_frequent')
         X_tr[categorical_features] = cat_imp.fit_transform(X_tr[categorical_features])
@@ -203,7 +188,7 @@ def run(gpu_id=None):
     log.info(f"Device: {device}")
     log.info("=" * 70)
 
-    # ── 1. Load data (mirrors XGBoostTraining_Final.py Phase 1) ──────────────
+    # Data loading
     log.info("\n[1] Loading data...")
 
     apt = pd.read_parquet(APT_PATH)[['icao', 'longitude', 'latitude']]
@@ -266,7 +251,7 @@ def run(gpu_id=None):
     target_col = 'actual_fuel_kg'
     feature_cols = [c for c in feature_cols if c in df_raw.columns]
 
-    # ── Apply SFS feature selection at column level (avoids any mask dimension issues) ──
+    # SFS feature filtering
     if os.path.exists(SELECTED_FEATURES_PATH):
         try:
             with open(SELECTED_FEATURES_PATH, 'r') as f:
@@ -287,7 +272,7 @@ def run(gpu_id=None):
     df_features = df_features.replace([np.inf, -np.inf], np.nan)
     log.info(f"  Real training intervals: {len(df_features):,}")
 
-    # ── 2. Real-data-only 80/20 split ────────────────────────────────────────
+    # Real-data split (80/20)
     log.info("\n[2] Splitting real data into train / val (80/20, random_state=42)...")
     # Keep aircraft_type for post-hoc breakdown — not as a feature at index level
     aircraft_type_series = df_features['aircraft_type'].reset_index(drop=True)
@@ -310,8 +295,7 @@ def run(gpu_id=None):
     log.info(f"  Train: {len(train_idx):,}  |  Val: {len(val_idx):,}")
     log.info(f"  Val widebody segments: {is_wb_val.sum():,}  ({is_wb_val.mean()*100:.1f}%)")
 
-    # ── 3. Load / generate synthetic widebody data ────────────────────────────
-    log.info("\n[3] Loading synthetic widebody data...")
+    # Synthetic sample generation
     if os.path.exists(SYNTHETIC_PATH):
         df_synthetic = pd.read_parquet(SYNTHETIC_PATH)
         log.info(f"  Loaded cached synthetic data: {len(df_synthetic):,} rows")
@@ -335,14 +319,14 @@ def run(gpu_id=None):
     y_synthetic = df_synthetic[target_col].values.astype(np.float32) if target_col in df_synthetic.columns \
         else df_synthetic.get('actual_fuel_kg', df_synthetic.get('fuel_kg', np.zeros(len(df_synthetic)))).values.astype(np.float32)
 
-    # ── 4. Build augmented training set ──────────────────────────────────────
+    # Augmented training set construction
     log.info("\n[4] Building augmented training set (real train + synthetic)...")
     X_aug_train = pd.concat([X_real_train, X_synthetic], ignore_index=True)
     y_aug_train = np.concatenate([y_real_train, y_synthetic]).astype(np.float32)
     log.info(f"  Augmented train size: {len(X_aug_train):,}  "
              f"(+{len(df_synthetic):,} synthetic = {len(df_synthetic)/len(y_real_train)*100:.1f}%)")
 
-    # ── 5. Preprocess (fit on real train only) ────────────────────────────────
+    # Preprocessing
     log.info("\n[5] Preprocessing (fit on real train, transform all sets)...")
     X_tr_s, X_vl_s, X_au_s, _ = preprocess(X_real_train, X_real_val, X_aug_train)
 
@@ -350,7 +334,7 @@ def run(gpu_id=None):
     y_vl      = y_real_val                            # evaluation on original scale
     y_au_log  = np.log1p(y_aug_train)
 
-    # ── 7. Train Model A — no synthetic ──────────────────────────────────────
+    # Baseline training (Train Model A)
     log.info("\n[6] Training Model A (no synthetic)...")
     t0 = time.time()
     model_a = XGBRegressor(**MODEL_PARAMS)
@@ -360,7 +344,7 @@ def run(gpu_id=None):
     pred_a_log = model_a.predict(X_vl_s)
     pred_a = np.maximum(np.expm1(pred_a_log), 0)
 
-    # ── 8. Train Model B — with synthetic ────────────────────────────────────
+    # Augmented training (Train Model B)
     log.info("\n[7] Training Model B (real + synthetic)...")
     t0 = time.time()
     model_b = XGBRegressor(**MODEL_PARAMS)
@@ -370,7 +354,7 @@ def run(gpu_id=None):
     pred_b_log = model_b.predict(X_vl_s)
     pred_b = np.maximum(np.expm1(pred_b_log), 0)
 
-    # ── 9. Compute metrics ────────────────────────────────────────────────────
+    # Evaluation
     log.info("\n[8] Computing metrics...")
 
     def collect_metrics(y_true, y_pred, label_prefix, aircraft_mask_wb):
@@ -417,7 +401,7 @@ def run(gpu_id=None):
             direction = "improvement" if delta < 0 else "degradation"
             log.info(f"  {split:14s} MAE change: {delta:+.1f} kg  ({pct:+.2f}%)  ← {direction}")
 
-    # ── 10. Save results ──────────────────────────────────────────────────────
+    # Persistence
     os.makedirs(os.path.dirname(OUTPUT_CSV), exist_ok=True)
     results_df.to_csv(OUTPUT_CSV, index=False)
     log.info(f"\n[+] Results saved to: {OUTPUT_CSV}")

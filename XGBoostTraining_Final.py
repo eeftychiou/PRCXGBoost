@@ -19,14 +19,14 @@ from tqdm import tqdm
 import matplotlib.pyplot as plt
 import seaborn as sns
 
-# Optimization Modes: 'legacy', 'grid', or 'optuna'
+# Optimization modes
 warnings.filterwarnings('ignore')
 
-# Aircraft specifications database - Centralized in config.py
+# Aircraft specs from config
 AIRCRAFT_DATA = config.AIRCRAFT_DATA
 WIDEBODY_AIRCRAFT = config.WIDEBODY_AIRCRAFT
 
-# File paths - Centralized in config.py
+# Config-driven file paths
 DATA_PATH = config.AUGMENTED_FINAL_CSV
 APT_PATH = config.APT_PARQUET
 FLIGHTLIST_PATH = config.FLIGHTLIST_TRAIN
@@ -55,7 +55,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Extended feature list
+# Feature space definition
 EXTENDED_FEATURES_FROM_PARQUET = [
     "origin_icao", "origin_name", "destination_icao", "destination_name", "mfc", "pax_high", 
     "fuselage_height", "wing_mac", "wing_t/c", "flaps_type", "flaps_area", "flaps_bf/b", 
@@ -107,16 +107,14 @@ def haversine(lon1, lat1, lon2, lat2):
 
 
 def save_model_plots(model, X_train, y_train, X_val, y_val, features, output_dir, rank_name):
-    """
-    Generates and saves diagnostic plots for the model.
-    """
+    """Generate model diagnostic plots."""
     os.makedirs(output_dir, exist_ok=True)
     plt.style.use('seaborn-v0_8-whitegrid')
     
-    # 1. Learning Curves (Loss history)
+    # Learning curves
     results = model.evals_result()
     if results and 'validation_0' in results:
-        # Save raw data to CSV
+        # Export training metrics
         history_df = pd.DataFrame(results['validation_0']).rename(columns={'rmse': 'train_rmse'})
         if 'validation_1' in results:
             history_df['val_rmse'] = results['validation_1']['rmse']
@@ -141,7 +139,7 @@ def save_model_plots(model, X_train, y_train, X_val, y_val, features, output_dir
         plt.savefig(os.path.join(output_dir, f'learning_curve_{rank_name}.png'))
         plt.close()
 
-    # 2. Predicted vs. Actual
+    # Regression error analysis
     y_val_orig = np.expm1(y_val)
     y_pred_log = model.predict(X_val)
     y_pred_orig = np.expm1(y_pred_log)
@@ -149,7 +147,7 @@ def save_model_plots(model, X_train, y_train, X_val, y_val, features, output_dir
     plt.figure(figsize=(10, 8))
     plt.scatter(y_val_orig, y_pred_orig, alpha=0.3, color='teal', s=10)
     
-    # Diagonal line
+    # Identity line
     max_val = max(y_val_orig.max(), y_pred_orig.max())
     plt.plot([0, max_val], [0, max_val], 'r--', lw=2)
     
@@ -161,7 +159,7 @@ def save_model_plots(model, X_train, y_train, X_val, y_val, features, output_dir
     plt.savefig(os.path.join(output_dir, f'predicted_vs_actual_{rank_name}.png'))
     plt.close()
 
-    # 3. Feature Importance (Top 20)
+    # Top-20 feature importance
     importance = model.feature_importances_
     sorted_idx = np.argsort(importance)[::-1][:20]
     
@@ -185,25 +183,7 @@ def save_model_plots(model, X_train, y_train, X_val, y_val, features, output_dir
 # ============================================================================
 # def generate_synthetic_widebody_data_enhanced(df_train, n_synthetic=25000, long_segment_pct=0.25, random_state=42):
 def generate_synthetic_widebody_data_enhanced(df_train, n_synthetic=25000, long_segment_pct=0.25, random_state=42):
-    """
-    Generate synthetic data for widebody aircraft with emphasis on long segments.
-    
-    Parameters:
-    -----------
-    df_train : DataFrame
-        Original training data with 'aircraft_type' column
-    n_synthetic : int
-        Total number of synthetic samples to generate (default: 25000)
-    long_segment_pct : float
-        Percentage of synthetic samples to generate from long segments (default: 0.25)
-    random_state : int
-        Random seed for reproducibility
-    
-    Returns:
-    --------
-    df_synthetic : DataFrame
-        Synthetic training data for widebody aircraft
-    """
+    """Generate widebody synthetic data favoring long segments."""
     np.random.seed(random_state)
     
     # Filter widebody aircraft from training data
@@ -389,8 +369,7 @@ def main(gpu_id=0, force_sfs=False, force_synthetic=False, opt_mode='legacy'):
     FORCE_RERUN_SFS = force_sfs or '--force-sfs' in sys.argv
     FORCE_RERUN_SYNTHETIC = force_synthetic or '--force-synthetic' in sys.argv
 
-    # Update RESULTS_DIR to be mode-specific
-    global RESULTS_DIR
+    # Mode-specific output directory
     RESULTS_DIR = os.path.join(config.MODELS_DIR, opt_mode)
     os.makedirs(RESULTS_DIR, exist_ok=True)
     
@@ -406,9 +385,7 @@ def main(gpu_id=0, force_sfs=False, force_synthetic=False, opt_mode='legacy'):
     logger.info(f"Using GPU device ID: {gpu_id}")
     logger.info("="*70)
 
-    # ========================================================================
-    # PHASE 1: LOAD AND PREPARE DATA
-    # ========================================================================
+    # PHASE 1: Data Ingestion
     logger.info("\nPHASE 1: LOADING TRAINING DATA")
 
     apt = pd.read_parquet(APT_PATH)
@@ -432,7 +409,7 @@ def main(gpu_id=0, force_sfs=False, force_synthetic=False, opt_mode='legacy'):
     fuel = pd.read_parquet(FUEL_PATH)
     logger.info(f"[+] Fuel data: {len(fuel):,} intervals")
 
-    logger.info("\nLoading extended feature data from parquets...")
+    # Load parquet-based feature set
     featured_data = pd.read_parquet(FEATURED_DATA_TRAIN)
     logger.info(f"[+] Featured data (train): {len(featured_data):,} rows, {len(featured_data.columns)} columns")
 
@@ -471,11 +448,11 @@ def main(gpu_id=0, force_sfs=False, force_synthetic=False, opt_mode='legacy'):
     fuel_intervals = fuel_intervals.rename(columns={'idx': 'interval_idx'})
     df_raw = df_raw.merge(fuel_intervals, on=['flight_id', 'interval_idx'], how='left')
 
-    logger.info("Merging extended features...")
+    # Join extended features
     df_raw = df_raw.merge(featured_data_selected, on=['flight_id', 'interval_idx'], how='left')
     logger.info(f"[+] Total columns: {len(df_raw.columns)}")
 
-    # Build feature list
+    # Assemble feature vector
     base_features = [
         'starting_mass_kg', 'alt_end_ft', 'alt_avg_ft', 'gs_avg_kts', 'vs_avg_fpm',
         'interval_duration_sec', 'altitude_change_rate', 'great_circle_distance',
@@ -487,7 +464,7 @@ def main(gpu_id=0, force_sfs=False, force_synthetic=False, opt_mode='legacy'):
 
     logger.info(f"[+] Total features: {len(feature_cols_selected)}")
 
-    # Add computed columns
+    # Feature engineering (derived metrics)
     if 'alt_avg_ft' not in df_raw.columns:
         df_raw['alt_avg_ft'] = (df_raw.get('alt_start_ft', 0) + df_raw.get('alt_end_ft', 0)) / 2
     if 'altitude_change_rate' not in df_raw.columns:
@@ -507,9 +484,7 @@ def main(gpu_id=0, force_sfs=False, force_synthetic=False, opt_mode='legacy'):
 
     logger.info(f"[+] Original dataset: {len(df_features):,} intervals")
 
-    # ========================================================================
-    # PHASE 1.5: GENERATE SYNTHETIC WIDEBODY DATA (ENHANCED)
-    # ========================================================================
+    # PHASE 1.5: Data Augmentation
     logger.info("\n" + "="*70)
     logger.info("PHASE 1.5: GENERATING ENHANCED SYNTHETIC WIDEBODY DATA")
     logger.info("="*70)
@@ -530,7 +505,7 @@ def main(gpu_id=0, force_sfs=False, force_synthetic=False, opt_mode='legacy'):
         df_synthetic.to_parquet(SYNTHETIC_PATH, index=False, engine='fastparquet')
 
 
-    # Combine original and synthetic data
+    # Merge real and synthetic distributions
     df_features_augmented = pd.concat([df_features, df_synthetic], ignore_index=True)
 
     logger.info(f"\n[+] Original training size: {len(df_features):,}")
@@ -538,15 +513,13 @@ def main(gpu_id=0, force_sfs=False, force_synthetic=False, opt_mode='legacy'):
     logger.info(f"[+] Augmented training size: {len(df_features_augmented):,}")
     logger.info(f"[+] Augmentation rate: {len(df_synthetic)/len(df_features)*100:.1f}%")
 
-    # Use augmented data for training
+    # Training set definition
     X_full = df_features_augmented[feature_cols_selected]
     y_full = df_features_augmented[target_col].values.astype(np.float32)
 
     logger.info(f"[+] Full dataset (with synthetic): {len(df_features_augmented):,} intervals")
 
-    # ========================================================================
-    # PHASE 2: 80/20 SPLIT FOR VALIDATION
-    # ========================================================================
+    # PHASE 2: Validation Strategy
     logger.info("\n" + "="*70)
     logger.info("PHASE 2: 80/20 TRAIN/VALIDATION SPLIT")
     logger.info("="*70)
@@ -558,9 +531,7 @@ def main(gpu_id=0, force_sfs=False, force_synthetic=False, opt_mode='legacy'):
     logger.info(f"[+] Training: {len(X_train):,} intervals ({len(X_train)/len(X_full)*100:.1f}%)")
     logger.info(f"[+] Validation: {len(X_val):,} intervals ({len(X_val)/len(X_full)*100:.1f}%)")
 
-    # ========================================================================
-    # PHASE 3: PREPROCESSING (FIT ON TRAIN)
-    # ========================================================================
+    # PHASE 3: Feature Scaling & Imputation
     logger.info("\nPHASE 3: DATA PREPROCESSING (FITTED ON TRAINING SET)")
 
     y_train_log = np.log1p(y_train)
@@ -569,7 +540,7 @@ def main(gpu_id=0, force_sfs=False, force_synthetic=False, opt_mode='legacy'):
     X_train_imputed = X_train.copy()
     X_val_imputed = X_val.copy()
 
-    # Drop entirely NaN columns to prevent SimpleImputer shape mismatches
+    # Remove invariant NaN columns
     nan_cols = [col for col in feature_cols_selected if X_train_imputed[col].isna().all()]
     if nan_cols:
         logger.info(f"[-] Dropping {len(nan_cols)} columns that are 100% NaN: {nan_cols}")
@@ -608,9 +579,7 @@ def main(gpu_id=0, force_sfs=False, force_synthetic=False, opt_mode='legacy'):
 
     logger.info(f"[+] Preprocessing complete")
 
-    # ========================================================================
-    # PHASE 4: FEATURE SELECTION (ON TRAIN)
-    # ========================================================================
+    # PHASE 4: Forward Feature Selection
     logger.info("\n" + "="*70)
     logger.info("PHASE 4: SEQUENTIAL FEATURE SELECTION (SFS)")
     logger.info("="*70)
@@ -628,7 +597,7 @@ def main(gpu_id=0, force_sfs=False, force_synthetic=False, opt_mode='legacy'):
         logger.info(f"    Original feature count: {feature_data.get('original_count', 'unknown')}")
         logger.info(f"    SFS took: {feature_data.get('sfs_time_seconds', 0)/60:.2f} minutes")
         
-        # Create mask for selected features (only those present in current data)
+        # Map selected features to current space
         selected_mask = np.array([feat in selected_features for feat in feature_cols_selected])
         missing = [f for f in selected_features if f not in feature_cols_selected]
         if missing:
@@ -658,7 +627,7 @@ def main(gpu_id=0, force_sfs=False, force_synthetic=False, opt_mode='legacy'):
             direction='forward', n_jobs=1, cv=5, scoring='neg_mean_squared_error'
         )
 
-        logger.info("Running SFS (this may take a while)...")
+        # Run SFS (forward search)
         sfs_start = time.time()
         sfs.fit(X_train_scaled, y_train_log)
         sfs_time = time.time() - sfs_start
@@ -706,7 +675,7 @@ def main(gpu_id=0, force_sfs=False, force_synthetic=False, opt_mode='legacy'):
         logger.info(f"[+] Human-readable list saved to: {txt_path}")
 
     logger.info(f"\n[+] Using {len(selected_features)} features for training")
-    logger.info("    Top 10 selected features:")
+    # Leaderboard: Top 10 features
     for i, feat in enumerate(selected_features[:10], 1):
         logger.info(f"      {i:2d}. {feat}")
     if len(selected_features) > 10:
@@ -715,19 +684,12 @@ def main(gpu_id=0, force_sfs=False, force_synthetic=False, opt_mode='legacy'):
     X_train_sfs = X_train_scaled[:, selected_mask]
     X_val_sfs = X_val_scaled[:, selected_mask]
 
-    # ========================================================================
-    # PHASE 5: GRID SEARCH FOR HYPERPARAMETERS ON 80% DATA
-    # ========================================================================
-    logger.info("\n" + "="*70)
-    logger.info("PHASE 5: GRID SEARCH FOR OPTIMAL HYPERPARAMETERS")
-    # ========================================================================
-    # PHASE 5: HYPERPARAMETER SELECTION
-    # ========================================================================
+    # PHASE 5: Hyperparameter Optimization
     logger.info("\n" + "="*70)
     logger.info(f"PHASE 5: HYPERPARAMETER SELECTION (Mode: {opt_mode.upper()})")
     logger.info("="*70)
 
-    # 1. Legacy Parameters (previously successful)
+    # Legacy tuned parameters
     legacy_params = {
         'n_estimators': 1455, 
         'learning_rate': 0.02885922756814833, 
@@ -740,7 +702,7 @@ def main(gpu_id=0, force_sfs=False, force_synthetic=False, opt_mode='legacy'):
         'reg_lambda': 2.3991563444540384e-08
     }
 
-    # 2. Grid Parameters (new combination provided by user)
+    # User-supplied grid parameters
     grid_params = {
         'n_estimators': 900,
         'learning_rate': 0.07,
@@ -756,7 +718,7 @@ def main(gpu_id=0, force_sfs=False, force_synthetic=False, opt_mode='legacy'):
     if opt_mode == 'optuna':
         import optuna
         from sklearn.model_selection import KFold
-        # ... [Optuna Logic below] ...
+        # Optuna optimization routine
 
         def objective(trial):
             params = {
@@ -779,7 +741,7 @@ def main(gpu_id=0, force_sfs=False, force_synthetic=False, opt_mode='legacy'):
             kf = KFold(n_splits=3, shuffle=True, random_state=42)
             rmse_scores = []
             
-            # Ensure data is C-contiguous
+            # Enforce C-contiguity for XGBoost compatibility
             X_t_arr = np.ascontiguousarray(X_train_sfs)
             y_t_arr = np.ascontiguousarray(np.log1p(y_train))
             
@@ -832,22 +794,20 @@ def main(gpu_id=0, force_sfs=False, force_synthetic=False, opt_mode='legacy'):
             'params': grid_params
         }])
     else:
-        logger.info("[!] Using Legacy Hyperparameters as requested.")
+        logger.info("[!] Using legacy hyperparameters.")
         top_10_cv = pd.DataFrame([{
             'mean_test_score': -0.0,
             'std_test_score': 0.0,
             'params': legacy_params
         }])
 
-    # Clean up and save processed data for plotting script
+    # Export processed data for visualization
     X_train_sfs_df = pd.DataFrame(X_train_sfs, columns=selected_features)
     X_val_sfs_df = pd.DataFrame(X_val_sfs, columns=selected_features)
     X_train_sfs_df.to_csv(os.path.join(RESULTS_DIR, 'X_train_processed.csv'), index=False)
     X_val_sfs_df.to_csv(os.path.join(RESULTS_DIR, 'X_val_processed.csv'), index=False)
 
-    # ========================================================================
-    # EVALUATE TOP 10 MODELS ON HELD-OUT 20% VALIDATION SET
-    # ========================================================================
+    # Validation phase: Top 10 evaluation
     logger.info("\n" + "="*70)
     logger.info("EVALUATING TOP 10 MODELS ON 20% VALIDATION SET")
     logger.info("="*70)
@@ -869,18 +829,18 @@ def main(gpu_id=0, force_sfs=False, force_synthetic=False, opt_mode='legacy'):
         
         model.fit(X_train_sfs, y_train_log)
         
-        # Predict on validation set
+        # Validation inference
         val_pred_log = model.predict(X_val_sfs)
         val_pred = np.expm1(val_pred_log)
         val_pred = np.maximum(val_pred, 0.0)
         
-        # Calculate validation metrics
+        # Compute performance metrics
         val_rmse = np.sqrt(np.mean((y_val - val_pred) ** 2))
         val_mae = np.mean(np.abs(y_val - val_pred))
         val_mape = np.mean(np.abs((y_val - val_pred) / (y_val + 1e-8))) * 100
         val_r2 = 1 - (np.sum((y_val - val_pred) ** 2) / np.sum((y_val - y_val.mean()) ** 2))
         
-        # Calculate training metrics
+        # Train-set diagnostics
         train_pred_log = model.predict(X_train_sfs)
         train_pred = np.expm1(train_pred_log)
         train_pred = np.maximum(train_pred, 0.0)
@@ -908,9 +868,7 @@ def main(gpu_id=0, force_sfs=False, force_synthetic=False, opt_mode='legacy'):
         logger.info(f"  Val R²:     {val_r2:.4f}")
         logger.info(f"  Gap:        {val_rmse - train_rmse:+.4f} kg")
 
-    # ========================================================================
-    # RANK BY VALIDATION RMSE
-    # ========================================================================
+    # Rank models by validation RMSE
     logger.info("\n" + "="*70)
     logger.info("TOP 10 MODELS RANKED BY VALIDATION RMSE")
     logger.info("="*70)
@@ -919,12 +877,12 @@ def main(gpu_id=0, force_sfs=False, force_synthetic=False, opt_mode='legacy'):
     results_df = results_df.sort_values('val_rmse', ascending=True)
     results_df['final_rank'] = range(1, len(results_df) + 1)
 
-    # Save detailed results
+    # Export performance metrics
     results_path = os.path.join(RESULTS_DIR, 'random_search_top10_validation_results.csv')
     results_df.to_csv(results_path, index=False)
     logger.info(f"[+] Detailed results saved: {results_path}")
 
-    # Display ranking table
+    # Log model leaderboard
     logger.info("\n| Final | CV   | Val RMSE | Train RMSE | Gap     | Val MAE  | Val R²  |")
     logger.info("|  Rank | Rank |   (kg)   |    (kg)    |  (kg)   |   (kg)   |         |")
     logger.info("|-------|------|----------|------------|---------|----------|---------|")
@@ -937,9 +895,7 @@ def main(gpu_id=0, force_sfs=False, force_synthetic=False, opt_mode='legacy'):
             f"{row['val_r2']:7.4f} |"
         )
 
-    # ========================================================================
-    # PHASE 6: PREPROCESS FULL DATASET
-    # ========================================================================
+    # PHASE 6: Full Data Preprocessing
     logger.info("\n" + "="*70)
     logger.info("PHASE 6: PREPROCESSING 100% OF DATA FOR FINAL TRAINING")
     logger.info("="*70)
@@ -965,9 +921,7 @@ def main(gpu_id=0, force_sfs=False, force_synthetic=False, opt_mode='legacy'):
     logger.info(f"[+] Full dataset preprocessed: {X_full_sfs.shape}")
 
 
-    # ========================================================================
-    # PHASE 7: DIAGNOSTIC - Check data sources FIRST
-    # ========================================================================
+    # PHASE 7: Data Integrity Diagnostics
     logger.info("🔍 DIAGNOSTIC: Verifying data sources...")
 
     # Check rank CSV row count
@@ -1001,7 +955,7 @@ def main(gpu_id=0, force_sfs=False, force_synthetic=False, opt_mode='legacy'):
 
     N_RANK_ROWS = 24289
 
-    # Load preprocessors
+    # Retrieve pre-trained transformers
     import joblib
     preprocessors_path = os.path.join(RESULTS_DIR, 'test_preprocessors_rank.joblib')
     preprocessors = joblib.load(preprocessors_path)
@@ -1015,9 +969,7 @@ def main(gpu_id=0, force_sfs=False, force_synthetic=False, opt_mode='legacy'):
     selected_mask = preprocessors['selected_mask']
     selected_features = preprocessors['selected_features']
 
-    # ========================================================================
-    # 1. LOAD SUBMISSION DATA TEMPLATE
-    # ========================================================================
+    # Sub-Phase 1: Template Ingestion
     logger.info("🔍 LOADING FUEL SUBMISSION DATA...")
     try:
         # For the final evaluation, we need to load the final template for creating the final parquet
@@ -1035,9 +987,7 @@ def main(gpu_id=0, force_sfs=False, force_synthetic=False, opt_mode='legacy'):
     featured_data_rank = pd.read_parquet(FEATURED_DATA_RANK).rename(columns={'idx': 'interval_idx'})
     featured_data_final = pd.read_parquet(FEATURED_DATA_TEST).rename(columns={'idx': 'interval_idx'})
 
-    # ========================================================================
-    # 2. PROCESS RANK DATA (24,289 rows)
-    # ========================================================================
+    # Sub-Phase 2: Segment Rank Processing
     logger.info("\n🔍 PROCESSING RANK DATA...")
     df_test_rank = rank_csv.head(N_RANK_ROWS).copy()
     if 'idx' in df_test_rank.columns:
@@ -1047,7 +997,7 @@ def main(gpu_id=0, force_sfs=False, force_synthetic=False, opt_mode='legacy'):
     logger.info(f"Rank fuel merge: {df_test_rank['end'].notna().sum() if 'end' in df_test_rank.columns else 0:,} / {len(df_test_rank):,} matched")
     df_test_rank = df_test_rank.merge(featured_data_rank, on=['flight_id', 'interval_idx'], how='left')
 
-    # AIRCRAFT_TYPE from featured_data_rank
+    # Propagate aircraft metadata
     if 'aircraft_type' in featured_data_rank.columns:
         aircraft_rank = featured_data_rank[['flight_id', 'aircraft_type']].drop_duplicates(subset=['flight_id'])
         df_test_rank = df_test_rank.merge(aircraft_rank, on='flight_id', how='left', suffixes=('', '_feat'))
@@ -1074,7 +1024,7 @@ def main(gpu_id=0, force_sfs=False, force_synthetic=False, opt_mode='legacy'):
         logger.warning(f"⚠️ Rank coordinates failed: {e}")
         df_test_rank['great_circle_distance'] = 1000
 
-    # SAFE COMPUTED COLUMNS
+    # Derived feature engineering (Final)
     for col in ['alt_avg_ft', 'altitude_change_rate', 'end_hour', 'interval_elapsed_from_flight_start']:
         if col not in df_test_rank.columns:
             if col == 'alt_avg_ft':
@@ -1110,9 +1060,7 @@ def main(gpu_id=0, force_sfs=False, force_synthetic=False, opt_mode='legacy'):
     X_test_rank_unscaled.to_csv(os.path.join(RESULTS_DIR, 'X_test_unscaled_RANK.csv'), index=False)
     logger.info(f"✅ RANK UNSCALED: {X_test_rank_unscaled.shape}")
 
-    # ========================================================================
-    # 3. PROCESS FINAL DATA (61,745 rows)
-    # ========================================================================
+    # Sub-Phase 3: Final Segment Processing
     logger.info("\n🔍 PROCESSING FINAL DATA...")
     df_test_final = final_csv.copy()
     if 'idx' in df_test_final.columns:
@@ -1149,7 +1097,7 @@ def main(gpu_id=0, force_sfs=False, force_synthetic=False, opt_mode='legacy'):
         logger.warning(f"⚠️ Final coordinates failed: {e}")
         df_test_final['great_circle_distance'] = 1000
 
-    # SAFE COMPUTED COLUMNS
+    # Derived feature engineering (Final)
     for col in ['alt_avg_ft', 'altitude_change_rate', 'end_hour', 'interval_elapsed_from_flight_start']:
         if col not in df_test_final.columns:
             if col == 'alt_avg_ft':
@@ -1185,14 +1133,12 @@ def main(gpu_id=0, force_sfs=False, force_synthetic=False, opt_mode='legacy'):
     X_test_final_unscaled.to_csv(os.path.join(RESULTS_DIR, 'X_test_unscaled_FINAL.csv'), index=False)
     logger.info(f"✅ FINAL UNSCALED: {X_test_final_unscaled.shape}")
 
-    # ========================================================================
-    # PHASE 7B: PERFECT HYBRID SCALED X_test_sfs + SUBMISSION TEMPLATE
-    # ========================================================================
+    # Phase 7B: Hybrid Test Vector Construction
     logger.info("\n" + "="*50)
     logger.info("PHASE 7B: Testing.py Rank + NEW Final Rows")
     logger.info("="*50)
 
-    # 1. LOAD EXACT Testing.py PROCESSED RANK ROWS (SCALED)
+    # 1. Import Testing.py scaled rank features
     testing_processed = os.path.join(RESULTS_DIR, 'test_X_test_processed.csv')
     if os.path.exists(testing_processed):
         X_test_rank_sfs = pd.read_csv(testing_processed).values
@@ -1202,17 +1148,17 @@ def main(gpu_id=0, force_sfs=False, force_synthetic=False, opt_mode='legacy'):
         X_test_rank_scaled = scaler_full.transform(X_test_rank_unscaled)
         X_test_rank_sfs = X_test_rank_scaled[:, selected_mask]
 
-    # 2. Scale ONLY NEW FINAL ROWS (37,456 rows from Final CSV 24,290+)
+    # 2. Scale incremental final features
     final_new_unscaled = X_test_final_unscaled.iloc[N_RANK_ROWS:]
     X_test_final_new_scaled = scaler_full.transform(final_new_unscaled)
     X_test_final_new_sfs = X_test_final_new_scaled[:, selected_mask]
     logger.info(f"✅ NEW Final rows: {X_test_final_new_sfs.shape}")
 
-    # 3. PERFECT HYBRID: Testing.py(24k) + NEW Final(37k) = 61,745
+    # 3. Concatenate hybrid test matrix
     X_test_sfs = np.vstack([X_test_rank_sfs, X_test_final_new_sfs])
     logger.info(f"✅ HYBRID X_test_sfs: {X_test_sfs.shape}")
 
-    # 4. SUBMISSION TEMPLATE
+    # 4. Ingest submission schema
     submission_template = fuel_submission[['idx', 'flight_id', 'start', 'end']].copy()
     logger.info(f"✅ Submission template: {submission_template.shape}")
 
@@ -1231,9 +1177,7 @@ def main(gpu_id=0, force_sfs=False, force_synthetic=False, opt_mode='legacy'):
     logger.info("="*70)
 
 
-    # ========================================================================
-    # PHASE 8: TRAIN ALL TOP 5 MODELS ON 100% AND GENERATE SUBMISSIONS
-    # ========================================================================
+    # PHASE 8: Final Model Training & Submission
     logger.info("\n" + "="*70)
     logger.info("PHASE 8: TRAINING ALL TOP 5 MODELS ON 100% DATA")
     logger.info("="*70)
@@ -1250,7 +1194,7 @@ def main(gpu_id=0, force_sfs=False, force_synthetic=False, opt_mode='legacy'):
         logger.info(f"Expected Validation RMSE: {row['val_rmse']:.4f} kg")
         logger.info(f"Parameters: {params}")
         
-        # Train model on 100% of data
+        # Fit to full augmented dataset
         final_model = XGBRegressor(
             random_state=42,
             objective='reg:squarederror',
@@ -1261,7 +1205,7 @@ def main(gpu_id=0, force_sfs=False, force_synthetic=False, opt_mode='legacy'):
             **params
         )
         
-        # Train model on 100% of data (using 10% for validation diagnostics)
+        # Split-validation for diagnostics
         X_train_final, X_val_final, y_train_final, y_val_final = train_test_split(
             X_full_sfs, y_full_log, test_size=0.1, random_state=42
         )
@@ -1288,7 +1232,7 @@ def main(gpu_id=0, force_sfs=False, force_synthetic=False, opt_mode='legacy'):
         # Get feature importance from the trained model
         feature_importance = final_model.feature_importances_
         
-        # Create DataFrame with features and their importance
+        # Aggregate feature weights
         importance_df = pd.DataFrame({
             'feature': selected_features,
             'importance': feature_importance,
@@ -1303,7 +1247,7 @@ def main(gpu_id=0, force_sfs=False, force_synthetic=False, opt_mode='legacy'):
         importance_df.to_csv(importance_path, index=False)
         logger.info(f"[+] Feature importance saved to: {importance_path}")
         
-        # Log top 20 most important features
+        # Display top-20 contributors
         logger.info(f"\n[+] Top 20 Most Important Features:")
         logger.info(f"{'Rank':<6} {'Feature':<45} {'Importance':<12} {'% Total':<10}")
         logger.info("-"*75)
@@ -1313,7 +1257,7 @@ def main(gpu_id=0, force_sfs=False, force_synthetic=False, opt_mode='legacy'):
                 f"{imp_row['importance']:<12.6f} {imp_row['importance_pct']:<10.2f}%"
             )
         
-        # Log bottom 10 least important features
+        # Display bottom-10 contributors
         logger.info(f"\n[+] Bottom 10 Least Important Features:")
         logger.info(f"{'Rank':<6} {'Feature':<45} {'Importance':<12} {'% Total':<10}")
         logger.info("-"*75)
@@ -1323,7 +1267,7 @@ def main(gpu_id=0, force_sfs=False, force_synthetic=False, opt_mode='legacy'):
                 f"{imp_row['importance']:<12.6f} {imp_row['importance_pct']:<10.2f}%"
             )
         
-        # Calculate and log cumulative importance
+        # Cumulative explainability analysis
         cumulative_importance = importance_df['importance_pct'].cumsum()
         n_features_90pct = (cumulative_importance <= 90).sum() + 1
         n_features_95pct = (cumulative_importance <= 95).sum() + 1
@@ -1344,7 +1288,7 @@ def main(gpu_id=0, force_sfs=False, force_synthetic=False, opt_mode='legacy'):
         
         logger.info(f"[+] Training RMSE (100% data): {full_rmse:.4f} kg")
         
-        # Make predictions on test set
+        # Test set inference
         test_pred_log = final_model.predict(X_test_sfs)
         test_pred = np.expm1(test_pred_log)
         test_pred = np.maximum(test_pred, 0.0)
@@ -1353,7 +1297,7 @@ def main(gpu_id=0, force_sfs=False, force_synthetic=False, opt_mode='legacy'):
         logger.info(f"    Range: [{test_pred.min():.2f}, {test_pred.max():.2f}] kg")
         logger.info(f"    Mean: {test_pred.mean():.2f} kg")
         
-        # Create submission
+        # Format submission output
         submission_df = submission_template.copy()
         submission_df['fuel_kg'] = test_pred.astype(np.float32)
         submission_df = submission_df[['idx', 'flight_id', 'start', 'end', 'fuel_kg']]
@@ -1363,7 +1307,7 @@ def main(gpu_id=0, force_sfs=False, force_synthetic=False, opt_mode='legacy'):
         submission_df.to_parquet(parquet_path, index=False, engine='fastparquet')
         logger.info(f"[+] Parquet saved: {parquet_path}")
         
-        # Save CSV
+        # Export CSV backup
         csv_path = os.path.join(RESULTS_DIR, f'final_submission_rank{rank}_synthetic_valrmse_{row["val_rmse"]:.4f}.csv')
         submission_df.to_csv(csv_path, index=False)
         logger.info(f"[+] CSV saved: {csv_path}")
@@ -1381,7 +1325,7 @@ def main(gpu_id=0, force_sfs=False, force_synthetic=False, opt_mode='legacy'):
             'params': params
         })
         
-        # Save parameters
+        # Export model metadata
         params_file = os.path.join(RESULTS_DIR, f'final_parameters_rank{rank}.txt')
         with open(params_file, 'w') as f:
             f.write(f"MODEL RANK #{rank}\n")
@@ -1394,7 +1338,7 @@ def main(gpu_id=0, force_sfs=False, force_synthetic=False, opt_mode='legacy'):
             for param, value in params.items():
                 f.write(f"  {param}: {value}\n")
 
-        # --- NEW CONFORMITY BLOCK FOR evaluate_model.py ---
+        # Export downstream artifacts
         # The evaluate script expects a folder for each model containing:
         # model.joblib, preprocessor.joblib, selected_features.json
         if rank == 1:
@@ -1427,9 +1371,7 @@ def main(gpu_id=0, force_sfs=False, force_synthetic=False, opt_mode='legacy'):
             
             logger.info(f"[+] Saved evaluation artifacts to {eval_model_dir}")
 
-    # ========================================================================
-    # PHASE 9: SUMMARY
-    # ========================================================================
+    # PHASE 9: Performance Summary
     logger.info("\n" + "="*70)
     logger.info("PHASE 9: FINAL SUMMARY")
     logger.info("="*70)
@@ -1453,9 +1395,7 @@ def main(gpu_id=0, force_sfs=False, force_synthetic=False, opt_mode='legacy'):
     
     logger.info("="*70)
     
-    # ========================================================================
-    # PHASE 10: GENERATE PAPER GRAPHICS AND TABLES
-    # ========================================================================
+    # PHASE 10: Visualization & Reporting
     logger.info("\n" + "="*70)
     logger.info("PHASE 10: GENERATING PAPER GRAPHICS AND TABLES")
     logger.info("="*70)
@@ -1473,7 +1413,18 @@ def main(gpu_id=0, force_sfs=False, force_synthetic=False, opt_mode='legacy'):
         logger.error(f"[-] Failed to generate paper graphics: {e}")
 
 
-def run(gpu_id=0, force_sfs=False, force_synthetic=False, opt_mode='legacy'):
+def run():
+    gpu_id = 0
+    force_sfs = '--force-sfs' in sys.argv
+    force_synthetic = '--force-synthetic' in sys.argv
+    
+    # Parse CLI optimization flags
+    opt_mode = 'legacy'
+    if '--grid' in sys.argv:
+        opt_mode = 'grid'
+    elif '--optuna' in sys.argv:
+        opt_mode = 'optuna'
+        
     main(gpu_id=gpu_id, force_sfs=force_sfs, force_synthetic=force_synthetic, opt_mode=opt_mode)
 
 if __name__ == "__main__":

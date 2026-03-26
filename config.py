@@ -4,30 +4,30 @@ Configuration for the ML pipeline.
 import os
 import logging
 
-# --- Core Paths ---
+# Core Paths
 DATA_DIR = "data"
 RAW_DATA_DIR = os.path.join(DATA_DIR, "acPerf")
 PROCESSED_DATA_DIR = os.path.join("processed")
 INTROSPECTION_DIR = "introspection"
 MODELS_DIR = "models"
-SUBMISSIONS_DIR = "submissions" # Added for evaluate_model.py
+SUBMISSIONS_DIR = "submissions"
 
-# Create core directories if they don't exist
+# Initialize directories
 os.makedirs(PROCESSED_DATA_DIR, exist_ok=True)
 os.makedirs(INTROSPECTION_DIR, exist_ok=True)
 os.makedirs(MODELS_DIR, exist_ok=True)
 os.makedirs(SUBMISSIONS_DIR, exist_ok=True)
 
-# --- Source Dataset Paths ---
+# Source Datasets
 BASE_DATASETS_DIR = os.path.join(DATA_DIR, "prc-2025-datasets")
 FLIGHTS_TRAIN_DIR = os.path.join(BASE_DATASETS_DIR, "flights_train")
 FLIGHTS_RANK_DIR = os.path.join(BASE_DATASETS_DIR, "flights_rank")
 METARS_DIR = os.path.join(DATA_DIR, "metars")
 
-# --- Interpolated Trajectory Paths ---
+# Interpolated Trajectories
 INTERPOLATED_TRAJECTORIES_DIR = os.path.join(DATA_DIR, "interpolated_trajectories")
 
-# --- Specific Data Files ---
+# Data Files
 APT_PARQUET = os.path.join(BASE_DATASETS_DIR, "apt.parquet")
 FLIGHTLIST_TRAIN = os.path.join(BASE_DATASETS_DIR, "flightlist_train.parquet")
 FLIGHTLIST_RANK = os.path.join(BASE_DATASETS_DIR, "flightlist_rank.parquet")
@@ -36,9 +36,9 @@ FUEL_TRAIN = os.path.join(BASE_DATASETS_DIR, "fuel_train.parquet")
 FUEL_RANK = os.path.join(BASE_DATASETS_DIR, "fuel_rank_submission.parquet")
 FUEL_FINAL = os.path.join(BASE_DATASETS_DIR, "fuel_final_submission.parquet")
 
-# --- Data Preparation ---
+# Execution Mode
 TEST_RUN = False
-TEST_RUN_FRACTION = 0.05  # Use a fraction of the data for test runs
+TEST_RUN_FRACTION = 0.05
 
 
 # Min-Max Scaler Bounds for PINN inputs
@@ -48,11 +48,11 @@ SCALER_BOUNDS = {
     'segment_start_mass': {'min': 20000, 'max': 90000}
 }
 
-# --- Logging Configuration ---
+# Logging
 LOG_FILE = os.path.join(INTROSPECTION_DIR, "error.log")
 LOG_LEVEL = logging.ERROR
 
-# --- Aircraft Specifications ---
+# Aircraft Specs
 AIRCRAFT_DATA = {
     'A19N': {'mtow_kg': 79200, 'oew_kg': 45100, 'mlw_kg': 67400, 'max_fuel_kg': 27200, 'type': 'narrowbody',
              'wing_area_m2': 122.6, 'cd0': 0.024},
@@ -130,7 +130,7 @@ AIRCRAFT_DATA = {
 
 WIDEBODY_AIRCRAFT = [k for k, v in AIRCRAFT_DATA.items() if v['type'] == 'widebody']
 
-# --- Extended Dataset Paths ---
+# Extended Datasets
 AUGMENTED_DATA_DIR = os.path.join(DATA_DIR, "AugmentedDataFromOPENAP")
 os.makedirs(AUGMENTED_DATA_DIR, exist_ok=True)
 
@@ -138,6 +138,6 @@ AUGMENTED_FINAL_CSV = os.path.join(AUGMENTED_DATA_DIR, "augmented_openap_correct
 AUGMENTED_FINAL_TEST_CSV = os.path.join(AUGMENTED_DATA_DIR, "augmented_openap_rank_final_ALL_FLIGHTS.csv")
 AUGMENTED_RANK_CSV = os.path.join(AUGMENTED_DATA_DIR, "augmented_openap_submission_ALL_FLIGHTSrank.csv")
 
-# Results and Feature Selection
+# Feature Selection
 SELECTED_FEATURES_PATH = os.path.join(DATA_DIR, "selected_features_sfs.json")
 SYNTHETIC_WIDEBODY_PATH = os.path.join(PROCESSED_DATA_DIR, "synthetic_widebody.parquet")
