@@ -44,6 +44,10 @@ FEATURED_DATA_TEST = os.path.join(config.PROCESSED_DATA_DIR, 'featured_data_fina
 SYNTHETIC_PATH = config.SYNTHETIC_WIDEBODY_PATH
 SELECTED_FEATURES_PATH = config.SELECTED_FEATURES_PATH
 
+# Ground-truth files (now available after competition reveal)
+FUEL_RANK_GT_PATH  = os.path.join(config.BASE_DATASETS_DIR, 'fuel_rank.parquet')
+FUEL_FINAL_GT_PATH = os.path.join(config.BASE_DATASETS_DIR, 'fuel_final.parquet')
+
 
 os.makedirs(RESULTS_DIR, exist_ok=True)
 
@@ -176,17 +180,13 @@ def save_model_plots(model, X_train, y_train, X_val, y_val, features, output_dir
 
 
 # ============================================================================
-# SYNTHETIC DATA GENERATION FUNCTION
+# SYNTHETIC WIDEBODY AUGMENTATION (25K samples; 25% from top-quartile segments)
 # ============================================================================
-# ============================================================================
-# ENHANCED SYNTHETIC DATA GENERATION FUNCTION (25K samples, 25% from long segments)
-# ============================================================================
-# def generate_synthetic_widebody_data_enhanced(df_train, n_synthetic=25000, long_segment_pct=0.25, random_state=42):
 def generate_synthetic_widebody_data_enhanced(df_train, n_synthetic=25000, long_segment_pct=0.25, random_state=42):
-    """Generate widebody synthetic data favoring long segments."""
+    """Gaussian-perturbed widebody augmentation; oversample long segments."""
     np.random.seed(random_state)
     
-    # Filter widebody aircraft from training data
+    # WB-only slice
     df_widebody = df_train[df_train['aircraft_type'].isin(WIDEBODY_AIRCRAFT)].copy()
     
     logger.info(f"Original widebody samples: {len(df_widebody):,}")
@@ -194,7 +194,7 @@ def generate_synthetic_widebody_data_enhanced(df_train, n_synthetic=25000, long_
     logger.info(f"  - {int(n_synthetic * long_segment_pct):,} from LONG segments ({long_segment_pct*100:.0f}%)")
     logger.info(f"  - {int(n_synthetic * (1-long_segment_pct)):,} from ALL segments ({(1-long_segment_pct)*100:.0f}%)")
     
-    # Identify segment duration column
+    # Resolve duration column name
     duration_col = None
     for col in ['segment_duration', 'interval_duration_sec', 'duration']:
         if col in df_widebody.columns:
@@ -207,20 +207,20 @@ def generate_synthetic_widebody_data_enhanced(df_train, n_synthetic=25000, long_
     else:
         logger.info(f"[+] Using '{duration_col}' to identify long segments")
         
-        # Calculate percentile threshold for "long" segments
+        # 75th/90th percentile thresholds for "long" segments
         duration_75th = df_widebody[duration_col].quantile(0.75)
         duration_90th = df_widebody[duration_col].quantile(0.90)
         
         logger.info(f"    Duration 75th percentile: {duration_75th:.1f}")
         logger.info(f"    Duration 90th percentile: {duration_90th:.1f}")
         
-        # Define long segments as top 25% (75th percentile and above)
+        # Flag top-quartile duration segments as long
         df_widebody['is_long_segment'] = df_widebody[duration_col] >= duration_75th
         
         n_long = df_widebody['is_long_segment'].sum()
         logger.info(f"    Long segments identified: {n_long:,} ({n_long/len(df_widebody)*100:.1f}%)")
     
-    # Calculate samples per aircraft type (proportional to existing distribution)
+    # Per-type sample allocation proportional to original distribution
     aircraft_counts = df_widebody['aircraft_type'].value_counts()
     aircraft_proportions = aircraft_counts / aircraft_counts.sum()
     
@@ -263,39 +263,31 @@ def generate_synthetic_widebody_data_enhanced(df_train, n_synthetic=25000, long_
         else:
             aircraft_data_long = aircraft_data.copy()
         
-        # Identify numerical and categorical columns
+        # Perturb-able numerical columns (exclude index/helper cols)
         numerical_cols = aircraft_data.select_dtypes(include=[np.number]).columns.tolist()
-        
-        # Remove columns that should not be perturbed
         exclude_cols = ['flight_id', 'interval_idx', 'idx', 'is_long_segment']
         numerical_cols = [col for col in numerical_cols if col not in exclude_cols]
         
-        # Generate samples from LONG segments
+        # Long-segment pool sampling
         for i in range(n_aircraft_from_long):
             if len(aircraft_data_long) == 0:
-                # Fallback to all data if no long segments
+                # Fallback to full pool if no long segments
                 base_sample = aircraft_data.sample(n=1, random_state=random_state+i).iloc[0].copy()
             else:
                 base_sample = aircraft_data_long.sample(n=1, random_state=random_state+i).iloc[0].copy()
             
-            # Perturb numerical features with small noise
+            # Gaussian perturbation per numerical feature
             for col in numerical_cols:
                 if col in base_sample.index and pd.notna(base_sample[col]):
                     original_value = base_sample[col]
-                    
-                    # Calculate standard deviation for this feature in this aircraft type
-                    if len(aircraft_data_long) > 1:
-                        col_std = aircraft_data_long[col].std()
-                    else:
-                        col_std = aircraft_data[col].std()
-                    
+                    col_std = aircraft_data_long[col].std() if len(aircraft_data_long) > 1 else aircraft_data[col].std()
                     if pd.notna(col_std) and col_std > 0:
-                        # Add noise: 5-15% of standard deviation
+                        # noise magnitude: U[5%, 15%] × feature std
                         noise_factor = np.random.uniform(0.05, 0.15)
                         noise = np.random.normal(0, col_std * noise_factor)
                         new_value = original_value + noise
                         
-                        # Ensure physical constraints
+                        # Physical domain clamps
                         if col in ['starting_mass_kg', 'actual_fuel_kg', 'fuel_kg']:
                             new_value = max(0, new_value)
                         elif col in ['alt_end_ft', 'alt_avg_ft', 'alt_start_ft']:
@@ -304,29 +296,21 @@ def generate_synthetic_widebody_data_enhanced(df_train, n_synthetic=25000, long_
                             new_value = max(0, min(new_value, 600))
                         elif col in ['interval_duration_sec', 'segment_duration']:
                             new_value = max(1, new_value)
-                        
                         base_sample[col] = new_value
-            
             synthetic_samples.append(base_sample)
-        
-        # Generate samples from ALL segments
+
+        # Full-pool sampling
         for i in range(n_aircraft_from_all):
             base_sample = aircraft_data.sample(n=1, random_state=random_state+n_aircraft_from_long+i).iloc[0].copy()
-            
-            # Perturb numerical features with small noise
             for col in numerical_cols:
                 if col in base_sample.index and pd.notna(base_sample[col]):
                     original_value = base_sample[col]
-                    
                     col_std = aircraft_data[col].std()
-                    
                     if pd.notna(col_std) and col_std > 0:
-                        # Add noise: 5-15% of standard deviation
                         noise_factor = np.random.uniform(0.05, 0.15)
                         noise = np.random.normal(0, col_std * noise_factor)
                         new_value = original_value + noise
-                        
-                        # Ensure physical constraints
+                        # Physical domain clamps
                         if col in ['starting_mass_kg', 'actual_fuel_kg', 'fuel_kg']:
                             new_value = max(0, new_value)
                         elif col in ['alt_end_ft', 'alt_avg_ft', 'alt_start_ft']:
@@ -342,7 +326,7 @@ def generate_synthetic_widebody_data_enhanced(df_train, n_synthetic=25000, long_
     
     df_synthetic = pd.DataFrame(synthetic_samples)
     
-    # Remove the helper column
+    # Drop temporary helper column
     if 'is_long_segment' in df_synthetic.columns:
         df_synthetic = df_synthetic.drop(columns=['is_long_segment'])
     
@@ -352,7 +336,7 @@ def generate_synthetic_widebody_data_enhanced(df_train, n_synthetic=25000, long_
     for aircraft, count in synth_counts.items():
         logger.info(f"  {aircraft}: {count:,} ({count/len(df_synthetic)*100:.1f}%)")
     
-    # Analyze duration distribution if available
+    # Log duration shift stats
     if duration_col and duration_col in df_synthetic.columns:
         synth_duration_mean = df_synthetic[duration_col].mean()
         orig_duration_mean = df_widebody[duration_col].mean()
@@ -450,6 +434,11 @@ def main(gpu_id=0, force_sfs=False, force_synthetic=False, opt_mode='legacy'):
 
     # Join extended features
     df_raw = df_raw.merge(featured_data_selected, on=['flight_id', 'interval_idx'], how='left')
+    # Carry flight_duration_seconds for haul binning (non-feature)
+    if 'flight_duration_seconds' not in df_raw.columns and 'flight_duration_seconds' in featured_data.columns:
+        _dur_tmp = featured_data[['flight_id', 'idx', 'flight_duration_seconds']].rename(
+            columns={'idx': 'interval_idx'})
+        df_raw = df_raw.merge(_dur_tmp, on=['flight_id', 'interval_idx'], how='left')
     logger.info(f"[+] Total columns: {len(df_raw.columns)}")
 
     # Assemble feature vector
@@ -464,7 +453,7 @@ def main(gpu_id=0, force_sfs=False, force_synthetic=False, opt_mode='legacy'):
 
     logger.info(f"[+] Total features: {len(feature_cols_selected)}")
 
-    # Feature engineering (derived metrics)
+    # Derived features
     if 'alt_avg_ft' not in df_raw.columns:
         df_raw['alt_avg_ft'] = (df_raw.get('alt_start_ft', 0) + df_raw.get('alt_end_ft', 0)) / 2
     if 'altitude_change_rate' not in df_raw.columns:
@@ -481,6 +470,13 @@ def main(gpu_id=0, force_sfs=False, force_synthetic=False, opt_mode='legacy'):
     df_features = df_raw[feature_cols_selected + [target_col]].copy()
     df_features = df_features.dropna(subset=[target_col])
     df_features = df_features.replace([np.inf, -np.inf], np.nan)
+    # Carry flight_duration_seconds as a non-feature column for haul binning later
+    # (merged into df_raw above from featured_data; not part of feature_cols_selected)
+    df_features['_flight_dur_s'] = (
+        df_raw.loc[df_features.index, 'flight_duration_seconds']
+        if 'flight_duration_seconds' in df_raw.columns
+        else np.nan
+    )
 
     logger.info(f"[+] Original dataset: {len(df_features):,} intervals")
 
@@ -505,7 +501,7 @@ def main(gpu_id=0, force_sfs=False, force_synthetic=False, opt_mode='legacy'):
         df_synthetic.to_parquet(SYNTHETIC_PATH, index=False, engine='fastparquet')
 
 
-    # Merge real and synthetic distributions
+    # Concat real + synthetic
     df_features_augmented = pd.concat([df_features, df_synthetic], ignore_index=True)
 
     logger.info(f"\n[+] Original training size: {len(df_features):,}")
@@ -513,7 +509,7 @@ def main(gpu_id=0, force_sfs=False, force_synthetic=False, opt_mode='legacy'):
     logger.info(f"[+] Augmented training size: {len(df_features_augmented):,}")
     logger.info(f"[+] Augmentation rate: {len(df_synthetic)/len(df_features)*100:.1f}%")
 
-    # Training set definition
+    # Full augmented feature/target arrays
     X_full = df_features_augmented[feature_cols_selected]
     y_full = df_features_augmented[target_col].values.astype(np.float32)
 
@@ -597,7 +593,7 @@ def main(gpu_id=0, force_sfs=False, force_synthetic=False, opt_mode='legacy'):
         logger.info(f"    Original feature count: {feature_data.get('original_count', 'unknown')}")
         logger.info(f"    SFS took: {feature_data.get('sfs_time_seconds', 0)/60:.2f} minutes")
         
-        # Map selected features to current space
+        # Intersect loaded features with current feature space
         selected_mask = np.array([feat in selected_features for feat in feature_cols_selected])
         missing = [f for f in selected_features if f not in feature_cols_selected]
         if missing:
@@ -627,7 +623,7 @@ def main(gpu_id=0, force_sfs=False, force_synthetic=False, opt_mode='legacy'):
             direction='forward', n_jobs=1, cv=5, scoring='neg_mean_squared_error'
         )
 
-        # Run SFS (forward search)
+        # Run forward SFS
         sfs_start = time.time()
         sfs.fit(X_train_scaled, y_train_log)
         sfs_time = time.time() - sfs_start
@@ -801,7 +797,7 @@ def main(gpu_id=0, force_sfs=False, force_synthetic=False, opt_mode='legacy'):
             'params': legacy_params
         }])
 
-    # Export processed data for visualization
+    # Save scaled train/val splits for offline analysis
     X_train_sfs_df = pd.DataFrame(X_train_sfs, columns=selected_features)
     X_val_sfs_df = pd.DataFrame(X_val_sfs, columns=selected_features)
     X_train_sfs_df.to_csv(os.path.join(RESULTS_DIR, 'X_train_processed.csv'), index=False)
@@ -813,6 +809,8 @@ def main(gpu_id=0, force_sfs=False, force_synthetic=False, opt_mode='legacy'):
     logger.info("="*70)
 
     validation_results = []
+    _best_val_rmse_seen = np.inf
+    _best_val_pred_kg   = None   # val predictions for the rank-1 model (lowest val RMSE)
 
     for rank, (idx, row) in enumerate(tqdm(top_10_cv.iterrows(), total=len(top_10_cv), desc="Training Top Models"), 1):
         logger.info(f"\nEvaluating Model {rank}/10...")
@@ -829,18 +827,24 @@ def main(gpu_id=0, force_sfs=False, force_synthetic=False, opt_mode='legacy'):
         
         model.fit(X_train_sfs, y_train_log)
         
-        # Validation inference
+        # Predict on held-out val set
         val_pred_log = model.predict(X_val_sfs)
         val_pred = np.expm1(val_pred_log)
         val_pred = np.maximum(val_pred, 0.0)
+
+        # Track rank-1 val predictions for phase/baseline analysis
+        _cur_val_rmse = float(np.sqrt(np.mean((y_val - val_pred)**2)))
+        if _cur_val_rmse < _best_val_rmse_seen:
+            _best_val_rmse_seen = _cur_val_rmse
+            _best_val_pred_kg   = val_pred.copy()
         
-        # Compute performance metrics
+        # Validation metrics
         val_rmse = np.sqrt(np.mean((y_val - val_pred) ** 2))
         val_mae = np.mean(np.abs(y_val - val_pred))
         val_mape = np.mean(np.abs((y_val - val_pred) / (y_val + 1e-8))) * 100
         val_r2 = 1 - (np.sum((y_val - val_pred) ** 2) / np.sum((y_val - y_val.mean()) ** 2))
         
-        # Train-set diagnostics
+        # Train diagnostics (overfitting gap)
         train_pred_log = model.predict(X_train_sfs)
         train_pred = np.expm1(train_pred_log)
         train_pred = np.maximum(train_pred, 0.0)
@@ -877,12 +881,12 @@ def main(gpu_id=0, force_sfs=False, force_synthetic=False, opt_mode='legacy'):
     results_df = results_df.sort_values('val_rmse', ascending=True)
     results_df['final_rank'] = range(1, len(results_df) + 1)
 
-    # Export performance metrics
+    # Save ranked results
     results_path = os.path.join(RESULTS_DIR, 'random_search_top10_validation_results.csv')
     results_df.to_csv(results_path, index=False)
     logger.info(f"[+] Detailed results saved: {results_path}")
 
-    # Log model leaderboard
+    # Leaderboard
     logger.info("\n| Final | CV   | Val RMSE | Train RMSE | Gap     | Val MAE  | Val R²  |")
     logger.info("|  Rank | Rank |   (kg)   |    (kg)    |  (kg)   |   (kg)   |         |")
     logger.info("|-------|------|----------|------------|---------|----------|---------|")
@@ -919,6 +923,9 @@ def main(gpu_id=0, force_sfs=False, force_synthetic=False, opt_mode='legacy'):
     X_full_sfs = X_full_scaled[:, selected_mask]
 
     logger.info(f"[+] Full dataset preprocessed: {X_full_sfs.shape}")
+    # Preserve SFS feature names/mask; Phase 7 will overwrite selected_features
+    _training_feat_names = list(selected_features)
+    _training_mask = selected_mask.copy()
 
 
     # PHASE 7: Data Integrity Diagnostics
@@ -969,7 +976,7 @@ def main(gpu_id=0, force_sfs=False, force_synthetic=False, opt_mode='legacy'):
     selected_mask = preprocessors['selected_mask']
     selected_features = preprocessors['selected_features']
 
-    # Sub-Phase 1: Template Ingestion
+    # Load submission template
     logger.info("🔍 LOADING FUEL SUBMISSION DATA...")
     try:
         # For the final evaluation, we need to load the final template for creating the final parquet
@@ -987,7 +994,7 @@ def main(gpu_id=0, force_sfs=False, force_synthetic=False, opt_mode='legacy'):
     featured_data_rank = pd.read_parquet(FEATURED_DATA_RANK).rename(columns={'idx': 'interval_idx'})
     featured_data_final = pd.read_parquet(FEATURED_DATA_TEST).rename(columns={'idx': 'interval_idx'})
 
-    # Sub-Phase 2: Segment Rank Processing
+    # Rank segment processing
     logger.info("\n🔍 PROCESSING RANK DATA...")
     df_test_rank = rank_csv.head(N_RANK_ROWS).copy()
     if 'idx' in df_test_rank.columns:
@@ -997,7 +1004,7 @@ def main(gpu_id=0, force_sfs=False, force_synthetic=False, opt_mode='legacy'):
     logger.info(f"Rank fuel merge: {df_test_rank['end'].notna().sum() if 'end' in df_test_rank.columns else 0:,} / {len(df_test_rank):,} matched")
     df_test_rank = df_test_rank.merge(featured_data_rank, on=['flight_id', 'interval_idx'], how='left')
 
-    # Propagate aircraft metadata
+    # Aircraft-type infill from featured_data_rank
     if 'aircraft_type' in featured_data_rank.columns:
         aircraft_rank = featured_data_rank[['flight_id', 'aircraft_type']].drop_duplicates(subset=['flight_id'])
         df_test_rank = df_test_rank.merge(aircraft_rank, on='flight_id', how='left', suffixes=('', '_feat'))
@@ -1006,7 +1013,7 @@ def main(gpu_id=0, force_sfs=False, force_synthetic=False, opt_mode='legacy'):
     df_test_rank['aircraft_type'] = df_test_rank['aircraft_type'].fillna('A320')
     logger.info(f"✅ Rank aircraft_type: {df_test_rank['aircraft_type'].notna().sum():,} / {len(df_test_rank):,} ({df_test_rank['aircraft_type'].nunique():,} types)")
 
-    # GREAT_CIRCLE_DISTANCE
+    # Great-circle distance (rank)
     logger.info("🔍 Adding RANK great_circle_distance...")
     try:
         flightlist_rank = pd.read_parquet(FLIGHTLIST_RANK_PATH)
@@ -1024,7 +1031,7 @@ def main(gpu_id=0, force_sfs=False, force_synthetic=False, opt_mode='legacy'):
         logger.warning(f"⚠️ Rank coordinates failed: {e}")
         df_test_rank['great_circle_distance'] = 1000
 
-    # Derived feature engineering (Final)
+    # Derived features (rank)
     for col in ['alt_avg_ft', 'altitude_change_rate', 'end_hour', 'interval_elapsed_from_flight_start']:
         if col not in df_test_rank.columns:
             if col == 'alt_avg_ft':
@@ -1060,7 +1067,7 @@ def main(gpu_id=0, force_sfs=False, force_synthetic=False, opt_mode='legacy'):
     X_test_rank_unscaled.to_csv(os.path.join(RESULTS_DIR, 'X_test_unscaled_RANK.csv'), index=False)
     logger.info(f"✅ RANK UNSCALED: {X_test_rank_unscaled.shape}")
 
-    # Sub-Phase 3: Final Segment Processing
+    # Final segment processing
     logger.info("\n🔍 PROCESSING FINAL DATA...")
     df_test_final = final_csv.copy()
     if 'idx' in df_test_final.columns:
@@ -1079,7 +1086,7 @@ def main(gpu_id=0, force_sfs=False, force_synthetic=False, opt_mode='legacy'):
     df_test_final['aircraft_type'] = df_test_final['aircraft_type'].fillna('A320')
     logger.info(f"✅ Final aircraft_type: {df_test_final['aircraft_type'].notna().sum():,} / {len(df_test_final):,} ({df_test_final['aircraft_type'].nunique():,} types)")
 
-    # GREAT_CIRCLE_DISTANCE
+    # Great-circle distance (final)
     logger.info("🔍 Adding FINAL great_circle_distance...")
     try:
         flightlist_final = pd.read_parquet(FLIGHTLIST_FINAL_PATH)
@@ -1097,7 +1104,7 @@ def main(gpu_id=0, force_sfs=False, force_synthetic=False, opt_mode='legacy'):
         logger.warning(f"⚠️ Final coordinates failed: {e}")
         df_test_final['great_circle_distance'] = 1000
 
-    # Derived feature engineering (Final)
+    # Derived features (final)
     for col in ['alt_avg_ft', 'altitude_change_rate', 'end_hour', 'interval_elapsed_from_flight_start']:
         if col not in df_test_final.columns:
             if col == 'alt_avg_ft':
@@ -1133,37 +1140,44 @@ def main(gpu_id=0, force_sfs=False, force_synthetic=False, opt_mode='legacy'):
     X_test_final_unscaled.to_csv(os.path.join(RESULTS_DIR, 'X_test_unscaled_FINAL.csv'), index=False)
     logger.info(f"✅ FINAL UNSCALED: {X_test_final_unscaled.shape}")
 
-    # Phase 7B: Hybrid Test Vector Construction
+    # Phase 7B: Hybrid test matrix — Testing.py rank rows + new final rows
     logger.info("\n" + "="*50)
     logger.info("PHASE 7B: Testing.py Rank + NEW Final Rows")
     logger.info("="*50)
 
-    # 1. Import Testing.py scaled rank features
+    # Load Testing.py pre-scaled rank features; recompute from unscaled if columns differ
     testing_processed = os.path.join(RESULTS_DIR, 'test_X_test_processed.csv')
     if os.path.exists(testing_processed):
-        X_test_rank_sfs = pd.read_csv(testing_processed).values
+        _rank_csv_df = pd.read_csv(testing_processed)
+        _missing = [c for c in _training_feat_names if c not in _rank_csv_df.columns]
+        if _missing:
+            logger.warning(f"⚠️ {len(_missing)} training features absent in Testing.py CSV — recomputing rank from unscaled data")
+            X_test_rank_scaled = scaler_full.transform(X_test_rank_unscaled)
+            X_test_rank_sfs = X_test_rank_scaled[:, _training_mask]
+        else:
+            X_test_rank_sfs = _rank_csv_df[_training_feat_names].values
         logger.info(f"✅ LOADED Testing.py rank: {X_test_rank_sfs.shape}")
     else:
         logger.warning("⚠️ No Testing.py file - scaling rank data")
         X_test_rank_scaled = scaler_full.transform(X_test_rank_unscaled)
-        X_test_rank_sfs = X_test_rank_scaled[:, selected_mask]
+        X_test_rank_sfs = X_test_rank_scaled[:, _training_mask]
 
-    # 2. Scale incremental final features
+    # Scale new final rows (apply training SFS mask)
     final_new_unscaled = X_test_final_unscaled.iloc[N_RANK_ROWS:]
     X_test_final_new_scaled = scaler_full.transform(final_new_unscaled)
-    X_test_final_new_sfs = X_test_final_new_scaled[:, selected_mask]
+    X_test_final_new_sfs = X_test_final_new_scaled[:, _training_mask]
     logger.info(f"✅ NEW Final rows: {X_test_final_new_sfs.shape}")
 
-    # 3. Concatenate hybrid test matrix
+    # Stack rank + final into hybrid test matrix
     X_test_sfs = np.vstack([X_test_rank_sfs, X_test_final_new_sfs])
     logger.info(f"✅ HYBRID X_test_sfs: {X_test_sfs.shape}")
 
-    # 4. Ingest submission schema
+    # Submission schema
     submission_template = fuel_submission[['idx', 'flight_id', 'start', 'end']].copy()
     logger.info(f"✅ Submission template: {submission_template.shape}")
 
     # Save scaled test data
-    pd.DataFrame(X_test_sfs, columns=selected_features).to_csv(
+    pd.DataFrame(X_test_sfs, columns=_training_feat_names).to_csv(
         os.path.join(RESULTS_DIR, 'X_test_processed_Final.csv'), index=False
     )
 
@@ -1182,6 +1196,19 @@ def main(gpu_id=0, force_sfs=False, force_synthetic=False, opt_mode='legacy'):
     logger.info("PHASE 8: TRAINING ALL TOP 5 MODELS ON 100% DATA")
     logger.info("="*70)
 
+    # Load GT fuel for post-hoc RMSE evaluation
+    gt_rank_df = gt_final_df = None
+    if os.path.exists(FUEL_RANK_GT_PATH):
+        gt_rank_df = pd.read_parquet(FUEL_RANK_GT_PATH)[['flight_id', 'idx', 'start', 'end', 'fuel_kg']]
+        logger.info(f"[+] Ground-truth rank loaded: {len(gt_rank_df):,} segments")
+    else:
+        logger.warning(f"[!] Ground-truth rank not found: {FUEL_RANK_GT_PATH}")
+    if os.path.exists(FUEL_FINAL_GT_PATH):
+        gt_final_df = pd.read_parquet(FUEL_FINAL_GT_PATH)[['flight_id', 'idx', 'start', 'end', 'fuel_kg']]
+        logger.info(f"[+] Ground-truth final loaded: {len(gt_final_df):,} segments")
+    else:
+        logger.warning(f"[!] Ground-truth final not found: {FUEL_FINAL_GT_PATH}")
+
     submission_files = []
 
     for idx, row in results_df.iterrows():
@@ -1194,7 +1221,7 @@ def main(gpu_id=0, force_sfs=False, force_synthetic=False, opt_mode='legacy'):
         logger.info(f"Expected Validation RMSE: {row['val_rmse']:.4f} kg")
         logger.info(f"Parameters: {params}")
         
-        # Fit to full augmented dataset
+        # Train on full augmented dataset
         final_model = XGBRegressor(
             random_state=42,
             objective='reg:squarederror',
@@ -1205,7 +1232,7 @@ def main(gpu_id=0, force_sfs=False, force_synthetic=False, opt_mode='legacy'):
             **params
         )
         
-        # Split-validation for diagnostics
+        # 10% split for learning-curve capture
         X_train_final, X_val_final, y_train_final, y_val_final = train_test_split(
             X_full_sfs, y_full_log, test_size=0.1, random_state=42
         )
@@ -1219,30 +1246,22 @@ def main(gpu_id=0, force_sfs=False, force_synthetic=False, opt_mode='legacy'):
         
         # Save plots for this model rank
         diag_dir = os.path.join(RESULTS_DIR, f'xgb_model_rank{rank}')
-        save_model_plots(final_model, X_train_final, y_train_final, X_val_final, y_val_final, 
-                         selected_features, diag_dir, f"rank{rank}")
+        save_model_plots(final_model, X_train_final, y_train_final, X_val_final, y_val_final,
+                         _training_feat_names, diag_dir, f"rank{rank}")
         
-        # ====================================================================
-        # FEATURE IMPORTANCE ANALYSIS
-        # ====================================================================
+        # ── Feature importance (XGBoost gain) ──────────────────────────────
         logger.info("\n" + "-"*70)
         logger.info(f"FEATURE IMPORTANCE ANALYSIS - MODEL RANK #{rank}")
         logger.info("-"*70)
-        
-        # Get feature importance from the trained model
+        # Use _training_feat_names (Phase-4 SFS); selected_features overwritten by Phase-7 joblib
         feature_importance = final_model.feature_importances_
-        
-        # Aggregate feature weights
         importance_df = pd.DataFrame({
-            'feature': selected_features,
+            'feature': _training_feat_names,
             'importance': feature_importance,
             'importance_pct': (feature_importance / feature_importance.sum()) * 100
         }).sort_values('importance', ascending=False).reset_index(drop=True)
         
-        # Add rank column
         importance_df['rank'] = range(1, len(importance_df) + 1)
-        
-        # Save to CSV
         importance_path = os.path.join(RESULTS_DIR, f'feature_importance_rank{rank}.csv')
         importance_df.to_csv(importance_path, index=False)
         logger.info(f"[+] Feature importance saved to: {importance_path}")
@@ -1267,7 +1286,7 @@ def main(gpu_id=0, force_sfs=False, force_synthetic=False, opt_mode='legacy'):
                 f"{imp_row['importance']:<12.6f} {imp_row['importance_pct']:<10.2f}%"
             )
         
-        # Cumulative explainability analysis
+        # Cumulative importance thresholds
         cumulative_importance = importance_df['importance_pct'].cumsum()
         n_features_90pct = (cumulative_importance <= 90).sum() + 1
         n_features_95pct = (cumulative_importance <= 95).sum() + 1
@@ -1275,12 +1294,10 @@ def main(gpu_id=0, force_sfs=False, force_synthetic=False, opt_mode='legacy'):
         logger.info(f"\n[+] Cumulative Importance Analysis:")
         logger.info(f"    Top {n_features_90pct} features explain 90% of importance")
         logger.info(f"    Top {n_features_95pct} features explain 95% of importance")
-        logger.info(f"    Total features: {len(selected_features)}")
+        logger.info(f"    Total features: {len(_training_feat_names)}")
         
         logger.info("-"*70)
-        # ====================================================================
-        
-        # Training performance
+        # Training set RMSE
         full_pred_log = final_model.predict(X_full_sfs)
         full_pred = np.expm1(full_pred_log)
         full_pred = np.maximum(full_pred, 0.0)
@@ -1288,7 +1305,7 @@ def main(gpu_id=0, force_sfs=False, force_synthetic=False, opt_mode='legacy'):
         
         logger.info(f"[+] Training RMSE (100% data): {full_rmse:.4f} kg")
         
-        # Test set inference
+        # Test set prediction
         test_pred_log = final_model.predict(X_test_sfs)
         test_pred = np.expm1(test_pred_log)
         test_pred = np.maximum(test_pred, 0.0)
@@ -1297,10 +1314,51 @@ def main(gpu_id=0, force_sfs=False, force_synthetic=False, opt_mode='legacy'):
         logger.info(f"    Range: [{test_pred.min():.2f}, {test_pred.max():.2f}] kg")
         logger.info(f"    Mean: {test_pred.mean():.2f} kg")
         
-        # Format submission output
+        # Build submission dataframe
         submission_df = submission_template.copy()
         submission_df['fuel_kg'] = test_pred.astype(np.float32)
         submission_df = submission_df[['idx', 'flight_id', 'start', 'end', 'fuel_kg']]
+
+        # ── Ground-truth RMSE evaluation ─────────────────────────────────────
+        rank_rmse = final_rmse = combined_rmse = np.nan
+        def _rmse(y_true, y_pred):
+            return float(np.sqrt(np.mean((np.array(y_true) - np.array(y_pred)) ** 2)))
+
+        if gt_rank_df is not None:
+            merged_rank = submission_df.merge(
+                gt_rank_df.rename(columns={'fuel_kg': 'fuel_kg_gt'}),
+                on=['flight_id', 'idx', 'start', 'end'], how='inner'
+            )
+            if len(merged_rank) > 0:
+                rank_rmse = _rmse(merged_rank['fuel_kg_gt'], merged_rank['fuel_kg'])
+                logger.info(f"[+] RANK  ground-truth RMSE: {rank_rmse:.4f} kg  "
+                            f"({len(merged_rank):,} segments matched)")
+            else:
+                logger.warning("[!] Rank GT merge returned 0 rows — check flight_id/idx alignment")
+
+        if gt_final_df is not None:
+            merged_final = submission_df.merge(
+                gt_final_df.rename(columns={'fuel_kg': 'fuel_kg_gt'}),
+                on=['flight_id', 'idx', 'start', 'end'], how='inner'
+            )
+            if len(merged_final) > 0:
+                final_rmse = _rmse(merged_final['fuel_kg_gt'], merged_final['fuel_kg'])
+                logger.info(f"[+] FINAL ground-truth RMSE: {final_rmse:.4f} kg  "
+                            f"({len(merged_final):,} segments matched)")
+            else:
+                logger.warning("[!] Final GT merge returned 0 rows — check flight_id/idx alignment")
+
+        if gt_rank_df is not None and gt_final_df is not None:
+            gt_combined = pd.concat([gt_rank_df, gt_final_df], ignore_index=True)
+            merged_combined = submission_df.merge(
+                gt_combined.rename(columns={'fuel_kg': 'fuel_kg_gt'}),
+                on=['flight_id', 'idx', 'start', 'end'], how='inner'
+            )
+            if len(merged_combined) > 0:
+                combined_rmse = _rmse(merged_combined['fuel_kg_gt'], merged_combined['fuel_kg'])
+                logger.info(f"[+] COMBINED  ground-truth RMSE: {combined_rmse:.4f} kg  "
+                            f"({len(merged_combined):,} segments matched)")
+        # ─────────────────────────────────────────────────────────────────────
         
         # Save parquet with fastparquet
         parquet_path = os.path.join(RESULTS_DIR, f'final_submission_rank{rank}_synthetic_valrmse_{row["val_rmse"]:.4f}.parquet')
@@ -1318,6 +1376,9 @@ def main(gpu_id=0, force_sfs=False, force_synthetic=False, opt_mode='legacy'):
             'val_mae': row.get('val_mae', 0.0),
             'val_r2': row.get('val_r2', 0.0),
             'train_rmse_100pct': full_rmse,
+            'gt_rank_rmse': rank_rmse,
+            'gt_final_rmse': final_rmse,
+            'gt_combined_rmse': combined_rmse,
             'parquet_file': parquet_path,
             'csv_file': csv_path,
             'test_mean': test_pred.mean(),
@@ -1325,7 +1386,7 @@ def main(gpu_id=0, force_sfs=False, force_synthetic=False, opt_mode='legacy'):
             'params': params
         })
         
-        # Export model metadata
+        # Save hyperparameter record
         params_file = os.path.join(RESULTS_DIR, f'final_parameters_rank{rank}.txt')
         with open(params_file, 'w') as f:
             f.write(f"MODEL RANK #{rank}\n")
@@ -1333,25 +1394,22 @@ def main(gpu_id=0, force_sfs=False, force_synthetic=False, opt_mode='legacy'):
             f.write(f"Validation RMSE: {row['val_rmse']:.4f} kg\n")
             f.write(f"Validation MAE:  {row['val_mae']:.4f} kg\n")
             f.write(f"Validation R²:   {row['val_r2']:.4f}\n")
-            f.write(f"Training RMSE (100%): {full_rmse:.4f} kg\n\n")
-            f.write("Hyperparameters:\n")
+            f.write(f"Training RMSE (100%): {full_rmse:.4f} kg\n")
+            if not np.isnan(rank_rmse):
+                f.write(f"Ground-truth Rank  RMSE: {rank_rmse:.4f} kg\n")
+            if not np.isnan(final_rmse):
+                f.write(f"Ground-truth Final RMSE: {final_rmse:.4f} kg\n")
+            if not np.isnan(combined_rmse):
+                f.write(f"Ground-truth Combined RMSE: {combined_rmse:.4f} kg\n")
+            f.write("\nHyperparameters:\n")
             for param, value in params.items():
                 f.write(f"  {param}: {value}\n")
 
-        # Export downstream artifacts
-        # The evaluate script expects a folder for each model containing:
-        # model.joblib, preprocessor.joblib, selected_features.json
+        # Save rank-1 artifacts for evaluate.py (model.joblib, preprocessor.joblib, selected_features.json)
         if rank == 1:
             eval_model_dir = os.path.join(RESULTS_DIR, f'final_xgb_model_rank{rank}')
             os.makedirs(eval_model_dir, exist_ok=True)
-            
-            # 1. Save model
             joblib.dump(final_model, os.path.join(eval_model_dir, 'model.joblib'))
-            
-            # 2. Save preprocessor dict
-            # We save the individual components so they can be loaded easily if needed,
-            # but we also save the unified preprocessors object under this folder for standard predict()
-            
             preprocessor_dict = {
                 'scaler_full': scaler_full,
                 'num_imputer_full': num_imputer_full, 
@@ -1364,12 +1422,815 @@ def main(gpu_id=0, force_sfs=False, force_synthetic=False, opt_mode='legacy'):
                 'categorical_features': categorical_features
             }
             joblib.dump(preprocessor_dict, os.path.join(eval_model_dir, 'preprocessor.joblib'))
-            
-            # 3. Save feature list
             with open(os.path.join(eval_model_dir, 'selected_features.json'), 'w') as f:
                 json.dump(selected_features, f)
             
             logger.info(f"[+] Saved evaluation artifacts to {eval_model_dir}")
+
+    # ════════════════════════════════════════════════════════════════════════
+    # PHASE 8.5: ABLATION STUDY (6 conditions, production pipeline)
+    # ════════════════════════════════════════════════════════════════════════
+    logger.info("\n" + "="*70)
+    logger.info("PHASE 8.5: ABLATION STUDY (6 conditions)")
+    logger.info("="*70)
+
+    if gt_rank_df is None or gt_final_df is None:
+        logger.warning("[ABLATION] GT files not available — skipping ablation study")
+    else:
+        # ── SFS feature set ───────────────────────────────────────────────
+        with open(SELECTED_FEATURES_PATH) as _af:
+            _afs = json.load(_af)
+        _sfs_feats = (_afs['selected_features'] if isinstance(_afs, dict) else _afs)
+        _sfs_feats = [c for c in _sfs_feats if c in feature_cols_selected]
+        logger.info(f"  Base SFS feature set: {len(_sfs_feats)} features")
+
+        _LF_COLS = [c for c in [
+            'average_load_factor', 'estimated_payload_kg',
+            'trip_fuel_kg', 'contingency_fuel_kg', 'final_reserve_fuel_kg',
+            'estimated_total_fuel_kg', 'estimated_takeoff_mass',
+        ] if c in _sfs_feats]
+
+        _DEVICE = f'cuda:{gpu_id}' if gpu_id is not None else 'cpu'
+        _n_real = len(df_features)
+
+        # ── Helper: refit preprocessors, train on 80% (Val) + 100% (GT) ──
+        def _abl_run(label, X_tr_df, feat_list, y_tr,
+                     X_ev_r, y_ev_r, at_ev_r,
+                     X_ev_f, y_ev_f, at_ev_f,
+                     _return_preds=False,
+                     X_tr_80_df=None, y_tr_80=None):
+
+            def _prep_fit_predict(Xtr, ytr, *Xev_dfs):
+                """Fit XGBoost on Xtr; return kg-scale preds for each Xev_df."""
+                f = [c for c in feat_list
+                     if c in Xtr.columns and not Xtr[c].isna().all()]
+                Xt = Xtr[f].copy().replace([np.inf, -np.inf], np.nan)
+                Xevs = [Xe.reindex(columns=f, fill_value=np.nan)
+                          .copy().replace([np.inf, -np.inf], np.nan)
+                        for Xe in Xev_dfs]
+                n_f = [c for c in f if pd.api.types.is_numeric_dtype(Xt[c])]
+                c_f = [c for c in f if c not in n_f]
+                if n_f:
+                    ni = SimpleImputer(strategy='mean')
+                    Xt[n_f] = ni.fit_transform(Xt[n_f])
+                    for Xe in Xevs:
+                        Xe[n_f] = ni.transform(Xe[n_f])
+                if c_f:
+                    ci = SimpleImputer(strategy='most_frequent')
+                    Xt[c_f] = ci.fit_transform(Xt[c_f])
+                    for Xe in Xevs:
+                        Xe[c_f] = ci.transform(Xe[c_f])
+                    ce = OrdinalEncoder(handle_unknown='use_encoded_value', unknown_value=-1)
+                    Xt[c_f] = ce.fit_transform(Xt[c_f])
+                    for Xe in Xevs:
+                        Xe[c_f] = ce.transform(Xe[c_f])
+                sc = StandardScaler()
+                Xt_s = sc.fit_transform(Xt)
+                Xevs_s = [sc.transform(Xe.values) for Xe in Xevs]
+                m = XGBRegressor(
+                    random_state=42, objective='reg:squarederror',
+                    tree_method='hist', device=_DEVICE, n_jobs=-1, verbosity=0,
+                    **dict(legacy_params))
+                t0 = time.time()
+                m.fit(Xt_s, np.log1p(ytr))
+                logger.info(f"  [{label[:35]}] {len(Xt):,} rows, {len(f)} feats → {time.time()-t0:.0f}s")
+                return [np.maximum(np.expm1(m.predict(Xe_s)), 0) for Xe_s in Xevs_s]
+
+            def _blk(y_true, y_pred, at_ser, ds):
+                rows_ = []
+                is_wb = at_ser.isin(WIDEBODY_AIRCRAFT).values
+                def _mm(yt_, yp_):
+                    mae_  = float(np.mean(np.abs(yt_ - yp_)))
+                    rmse_ = float(np.sqrt(np.mean((yt_ - yp_)**2)))
+                    mape_ = float(np.mean(np.abs((yt_ - yp_) / (yt_ + 1e-8))) * 100)
+                    r2_   = float(1 - np.sum((yt_ - yp_)**2) / np.sum((yt_ - np.mean(yt_))**2))
+                    return mae_, rmse_, mape_, r2_
+                mae, rmse, mape, r2 = _mm(y_true, y_pred)
+                rows_.append({'condition': label, 'dataset': ds, 'split': 'Overall',
+                              'n': len(y_true), 'mae': mae, 'rmse': rmse, 'mape': mape, 'r2': r2})
+                logger.info(f"    [{ds}] Overall   MAE={mae:.1f}  RMSE={rmse:.1f}  R²={r2:.4f}  N={len(y_true):,}")
+                for _sp, _mask in [('Narrowbody', ~is_wb), ('Widebody', is_wb)]:
+                    if _mask.sum() > 0:
+                        m2, r2b, mp2, r22 = _mm(y_true[_mask], y_pred[_mask])
+                        rows_.append({'condition': label, 'dataset': ds, 'split': _sp,
+                                      'n': int(_mask.sum()), 'mae': m2, 'rmse': r2b,
+                                      'mape': mp2, 'r2': r22})
+                        logger.info(f"    [{ds}] {_sp:<12}  MAE={m2:.1f}  RMSE={r2b:.1f}  N={_mask.sum():,}")
+                return rows_
+
+            rows = []
+            # Val: train on 80%, eval on 20% hold-out
+            if X_tr_80_df is not None and y_tr_80 is not None:
+                pv = _prep_fit_predict(X_tr_80_df, y_tr_80, X_val)[0]
+                rows += _blk(y_val, pv, _at_val, 'Val')
+            # GT: train on 100%, eval on combined hidden GT
+            pgt = _prep_fit_predict(X_tr_df, y_tr, X_ev_r, X_ev_f)
+            pr, pf = pgt[0], pgt[1]
+            y_comb  = np.concatenate([y_ev_r, y_ev_f])
+            p_comb  = np.concatenate([pr, pf])
+            at_comb = pd.concat([at_ev_r.reset_index(drop=True),
+                                 at_ev_f.reset_index(drop=True)], ignore_index=True)
+            rows += _blk(y_comb, p_comb, at_comb, 'GT')
+
+            if _return_preds:
+                return rows, p_comb, y_comb, at_comb
+            return rows
+
+        # ── Build GT-aligned eval DataFrames from Phase 7 outputs ─────────
+        _gt_r = gt_rank_df[['flight_id', 'idx', 'fuel_kg']].rename(
+            columns={'idx': 'interval_idx', 'fuel_kg': '_gt'})
+        _gt_f = gt_final_df[['flight_id', 'idx', 'fuel_kg']].rename(
+            columns={'idx': 'interval_idx', 'fuel_kg': '_gt'})
+
+        _rank_ev  = df_test_rank.merge(_gt_r,  on=['flight_id', 'interval_idx'], how='inner')
+        _final_ev = df_test_final.merge(_gt_f, on=['flight_id', 'interval_idx'], how='inner')
+        y_ev_r  = _rank_ev['_gt'].values.astype(np.float32)
+        y_ev_f  = _final_ev['_gt'].values.astype(np.float32)
+        at_ev_r = _rank_ev.get('aircraft_type',
+                                pd.Series(['A320'] * len(_rank_ev), index=_rank_ev.index))
+        at_ev_f = _final_ev.get('aircraft_type',
+                                 pd.Series(['A320'] * len(_final_ev), index=_final_ev.index))
+        logger.info(f"  GT-matched: Rank={len(_rank_ev):,}  Final={len(_final_ev):,}")
+
+        # ── Per-phase GT metrics (production rank-1 model) ────────────────
+        logger.info(f"\n{'═'*70}")
+        logger.info("  PER-PHASE GT METRICS (Production Rank-1 Model, Combined GT)")
+        logger.info(f"{'═'*70}")
+        _prod_preds_bl = None  # filled inside try; used by baseline comparison below
+        try:
+            _rank1_dir = os.path.join(RESULTS_DIR, 'final_xgb_model_rank1')
+            _prod_model = joblib.load(os.path.join(_rank1_dir, 'model.joblib'))
+            _prep_from_disk = joblib.load(os.path.join(RESULTS_DIR, 'test_preprocessors_rank.joblib'))
+            _prod_all_feats = _prep_from_disk['feature_cols_selected']  # full set (~125)
+            # _training_mask (56 features) is already set from Phase 6 — use it directly
+            _prod_num_imp   = _prep_from_disk['num_imputer_full']
+            _prod_cat_imp   = _prep_from_disk['cat_imputer_full']
+            _prod_cat_enc   = _prep_from_disk['cat_encoder_full']
+            _prod_scaler    = _prep_from_disk['scaler_full']
+            _prod_num_f     = _prep_from_disk['numerical_features']
+            _prod_cat_f     = _prep_from_disk['categorical_features']
+            logger.info(f"  Loaded rank-1 model + preprocessors ({len(_training_feat_names)} training features)")
+
+            # ── Assign dominant phase from phase_fraction_* columns ───────
+            _pf_map = {
+                'phase_fraction_climb':   'CLIMB',
+                'phase_fraction_cruise':  'CRUISE',
+                'phase_fraction_descent': 'DESCENT',
+                'phase_fraction_approach':'DESCENT',   # collapse into DESCENT
+                'phase_fraction_landing': 'DESCENT',
+                'phase_fraction_takeoff': 'CLIMB',
+            }
+            _pf_avail = [c for c in _pf_map if c in _rank_ev.columns]
+            def _dom_phase(df_):
+                if not _pf_avail:
+                    return pd.Series(['UNKNOWN'] * len(df_), index=df_.index)
+                dom = df_[_pf_avail].idxmax(axis=1).map(_pf_map)
+                zero = df_[_pf_avail].sum(axis=1) == 0
+                dom[zero] = 'UNKNOWN'
+                return dom
+
+            # Combined eval frame (Rank + Final)
+            _comb_ev  = pd.concat([_rank_ev, _final_ev], ignore_index=True)
+            _comb_gt  = np.concatenate([y_ev_r, y_ev_f])
+            _comb_ph  = _dom_phase(_comb_ev).values
+
+            # Apply prod preprocessors: full feature matrix → impute/encode → scale → SFS mask
+            _Xp = _comb_ev.reindex(columns=_prod_all_feats,
+                                   fill_value=np.nan).copy()
+            _Xp.replace([np.inf, -np.inf], np.nan, inplace=True)
+            _n_f_p = [c for c in _prod_all_feats if c in _prod_num_f]
+            _c_f_p = [c for c in _prod_all_feats if c in _prod_cat_f]
+            if _n_f_p:
+                _Xp[_n_f_p] = _prod_num_imp.transform(_Xp[_n_f_p])
+            if _c_f_p:
+                _Xp[_c_f_p] = _prod_cat_imp.transform(_Xp[_c_f_p])
+                _Xp[_c_f_p] = _prod_cat_enc.transform(_Xp[_c_f_p])
+            # scale on all 125 features, then apply the Phase-4 SFS mask → 56
+            _Xp_s = _prod_scaler.transform(_Xp.values)
+            _Xp_s = _Xp_s[:, _training_mask]
+            _prod_preds = np.maximum(np.expm1(_prod_model.predict(_Xp_s)), 0)
+            _prod_preds_bl = _prod_preds  # expose for baseline comparison below
+
+            # OpenAP column (optional, present only if featured_data carried it)
+            _oap_col = next((c for c in ['openap_fuel_kg', 'openap_pred_kg',
+                                          'openap_segment_fuel'] if c in _comb_ev.columns), None)
+            _oap_vals = _comb_ev[_oap_col].values if _oap_col else None
+
+            _ph_rows = []
+            for _ph in ['CLIMB', 'CRUISE', 'DESCENT']:
+                _msk = (_comb_ph == _ph)
+                if _msk.sum() < 5:
+                    continue
+                _yt_ = _comb_gt[_msk]
+                _yp_ = _prod_preds[_msk]
+                _n_  = int(_msk.sum())
+                _mae_  = float(np.mean(np.abs(_yt_ - _yp_)))
+                _rmse_ = float(np.sqrt(np.mean((_yt_ - _yp_)**2)))
+                _mape_ = float(np.mean(np.abs((_yt_ - _yp_) / (_yt_ + 1e-8))) * 100)
+                _r2_   = float(1 - np.sum((_yt_ - _yp_)**2) /
+                               np.sum((_yt_ - np.mean(_yt_))**2))
+                _oap_rmse = np.nan
+                if _oap_vals is not None:
+                    _yo_ = _oap_vals[_msk].astype(float)
+                    _vld = ~np.isnan(_yo_)
+                    if _vld.sum() > 0:
+                        _oap_rmse = float(np.sqrt(np.mean(
+                            (_yt_[_vld] - _yo_[_vld])**2)))
+                _ph_rows.append({
+                    'phase': _ph, 'n': _n_,
+                    'mean_actual_kg': float(np.mean(_yt_)),
+                    'mae': _mae_, 'rmse': _rmse_, 'mape': _mape_, 'r2': _r2_,
+                    'openap_rmse': _oap_rmse,
+                })
+
+            _ph_df = pd.DataFrame(_ph_rows)
+            _ph_out = os.path.join(RESULTS_DIR, 'per_phase_gt_metrics.csv')
+            _ph_df.to_csv(_ph_out, index=False)
+            logger.info(f"\n[+] Per-phase GT metrics → {_ph_out}")
+            logger.info(f"\n{'─'*80}")
+            logger.info(f"  {'Phase':<10} {'N':>7}  {'Mean(kg)':>9}"
+                        f"  {'MAE':>7}  {'RMSE':>7}  {'MAPE%':>7}  {'R²':>7}  {'OAP RMSE':>9}")
+            logger.info(f"{'─'*80}")
+            for _, _rw in _ph_df.iterrows():
+                _os = f"{_rw['openap_rmse']:>9.1f}" if not np.isnan(_rw['openap_rmse']) else "      N/A"
+                logger.info(f"  {_rw['phase']:<10} {_rw['n']:>7,}  "
+                            f"{_rw['mean_actual_kg']:>9.1f}  {_rw['mae']:>7.1f}  "
+                            f"{_rw['rmse']:>7.1f}  {_rw['mape']:>7.1f}  "
+                            f"{_rw['r2']:>7.4f}  {_os}")
+            logger.info(f"{'─'*80}")
+            # -- Val per-phase metrics (rank-1 model, 20% hold-out) --
+            if _best_val_pred_kg is not None:
+                _pf_avail_v = [c for c in _pf_map if c in X_val.columns]
+                if _pf_avail_v:
+                    _val_ph_dom = X_val[_pf_avail_v].idxmax(axis=1).map(_pf_map)
+                    _zero_v = X_val[_pf_avail_v].sum(axis=1) == 0
+                    _val_ph_dom[_zero_v] = 'UNKNOWN'
+                else:
+                    _val_ph_dom = pd.Series(
+                        ['UNKNOWN'] * len(X_val), index=X_val.index)
+                _val_ph_arr = _val_ph_dom.values
+                for _ph_r in _ph_rows:
+                    _ph = _ph_r['phase']
+                    _msk_v = (_val_ph_arr == _ph)
+                    if _msk_v.sum() < 5:
+                        _ph_r.update({'val_n': 0, 'val_mae': np.nan,
+                                      'val_rmse': np.nan, 'val_mape': np.nan,
+                                      'val_r2': np.nan})
+                        continue
+                    _yt_v = y_val[_msk_v]
+                    _yp_v = _best_val_pred_kg[_msk_v]
+                    _ph_r['val_n']    = int(_msk_v.sum())
+                    _ph_r['val_mae']  = float(np.mean(np.abs(_yt_v - _yp_v)))
+                    _ph_r['val_rmse'] = float(np.sqrt(np.mean((_yt_v - _yp_v)**2)))
+                    _ph_r['val_mape'] = float(
+                        np.mean(np.abs((_yt_v - _yp_v) / (_yt_v + 1e-8))) * 100)
+                    _ph_r['val_r2']   = float(
+                        1 - np.sum((_yt_v - _yp_v)**2) /
+                        np.sum((_yt_v - np.mean(_yt_v))**2))
+                _ph_df = pd.DataFrame(_ph_rows)
+                _ph_df.to_csv(_ph_out, index=False)  # re-save with val columns
+        except Exception as _phe:
+            logger.warning(f"[!] Per-phase GT metrics failed: {_phe}")
+            import traceback; logger.warning(traceback.format_exc())
+
+        # ── Precompute val-split helpers for dual Val / GT evaluation ─────
+        _at_val = (df_features_augmented.loc[X_val.index, 'aircraft_type']
+                   .reset_index(drop=True)
+                   if 'aircraft_type' in df_features_augmented.columns
+                   else pd.Series(['A320'] * len(X_val), name='aircraft_type'))
+        _X_aug_80 = X_train.reindex(columns=_sfs_feats, fill_value=np.nan).copy()
+        _y_aug_80 = y_train.copy()
+        _real_in_train = (X_train.index < _n_real)
+        if _real_in_train.any():
+            _X_real_80 = X_train.loc[X_train.index[_real_in_train],
+                                     _sfs_feats].copy()
+            _y_real_80 = y_train[np.asarray(_real_in_train)].copy()
+        else:
+            _X_real_80, _y_real_80 = _X_aug_80, _y_aug_80
+        logger.info(f"  Val helpers: {len(_X_aug_80):,} aug-80% rows, "
+                    f"{len(_X_real_80):,} real-80% rows, "
+                    f"{len(_at_val):,} val aircraft types")
+
+        # ── Variant training DataFrames ───────────────────────────────────
+        # 1 & 2: Base and No-Synthetic
+        _X_aug  = df_features_augmented[_sfs_feats].copy()
+        _y_aug  = y_full.copy()
+        _X_real = df_features[_sfs_feats].copy()
+        _y_real = df_features[target_col].values.astype(np.float32)
+
+        # +C1: METAR features — dep_*/arr_* columns from full featured parquet
+        _metar_cols = [c for c in featured_data.columns
+                       if (c.startswith('dep_') or c.startswith('arr_'))
+                       and c not in _sfs_feats]
+        _c1_ok = len(_metar_cols) > 0
+        if _c1_ok:
+            _midx = 'interval_idx' if 'interval_idx' in featured_data.columns else 'idx'
+            _ms = featured_data[['flight_id', _midx] + _metar_cols].rename(
+                columns={_midx: 'interval_idx'})
+            # Build real rows with METAR from df_raw (has flight_id + interval_idx)
+            _real_idx = df_features.index
+            _dr_real = df_raw.loc[_real_idx, ['flight_id', 'interval_idx', target_col] +
+                                              [c for c in _sfs_feats if c in df_raw.columns]].copy()
+            _dr_real = _dr_real.merge(_ms, on=['flight_id', 'interval_idx'], how='left')
+            _fc_m = [c for c in _sfs_feats if c in _dr_real.columns] + \
+                    [c for c in _metar_cols if c in _dr_real.columns]
+            _X_real_m = _dr_real[_fc_m].copy()
+            _y_real_m = _dr_real[target_col].values.astype(np.float32)
+            # Synthetic rows: METAR columns set to NaN (imputed to train mean)
+            _syn_m = df_features_augmented.iloc[_n_real:].reindex(columns=_fc_m, fill_value=np.nan)
+            _X_aug_m = pd.concat([_X_real_m, _syn_m], ignore_index=True)
+            _y_aug_m = np.concatenate([_y_real_m, _y_aug[_n_real:]])
+            # Eval frames with METAR columns
+            _mr = featured_data_rank[['flight_id', 'interval_idx'] +
+                                     [c for c in _metar_cols if c in featured_data_rank.columns]]
+            _mf = featured_data_final[['flight_id', 'interval_idx'] +
+                                      [c for c in _metar_cols if c in featured_data_final.columns]]
+            _rank_ev_m  = _rank_ev.merge(_mr,  on=['flight_id', 'interval_idx'], how='left')
+            _final_ev_m = _final_ev.merge(_mf, on=['flight_id', 'interval_idx'], how='left')
+            logger.info(f"  C1: {len(_metar_cols)} METAR columns (dep_*/arr_*) added")
+        else:
+            logger.warning("  C1: No dep_*/arr_* columns in featured_data — skipping")
+
+        # –C3: replace dynamic starting_mass_kg with static MTOW estimate
+        _c3_ok = ('starting_mass_kg' in _sfs_feats
+                  and 'estimated_takeoff_mass' in df_features_augmented.columns)
+        if _c3_ok:
+            _X_c3 = _X_aug.copy()
+            _X_c3['starting_mass_kg'] = df_features_augmented['estimated_takeoff_mass'].values
+            _X_c3_80 = _X_aug_80.copy()
+            _X_c3_80['starting_mass_kg'] = df_features_augmented.loc[
+                X_train.index, 'estimated_takeoff_mass'].values
+            _rank_ev_c3  = _rank_ev.copy()
+            _final_ev_c3 = _final_ev.copy()
+            if 'estimated_takeoff_mass' in _rank_ev_c3.columns:
+                _rank_ev_c3['starting_mass_kg']  = _rank_ev_c3['estimated_takeoff_mass']
+            if 'estimated_takeoff_mass' in _final_ev_c3.columns:
+                _final_ev_c3['starting_mass_kg'] = _final_ev_c3['estimated_takeoff_mass']
+        else:
+            logger.warning("  C3: starting_mass_kg or estimated_takeoff_mass not available")
+
+        # +C4: elapsed flight time (not selected by SFS)
+        _c4_feat = 'interval_elapsed_from_flight_start'
+        _c4_ok = (_c4_feat in df_features_augmented.columns
+                  and _c4_feat not in _sfs_feats)
+        if _c4_ok:
+            _fc_c4 = _sfs_feats + [_c4_feat]
+            _X_c4 = df_features_augmented[_fc_c4].copy()
+            _X_c4_80 = X_train.reindex(columns=_fc_c4, fill_value=np.nan).copy()
+        elif _c4_feat in _sfs_feats:
+            logger.info(f"  C4: {_c4_feat} already in SFS — additive test not applicable")
+            _c4_ok = False
+        else:
+            logger.warning(f"  C4: {_c4_feat} not found in training data — skipping")
+            _c4_ok = False
+
+        # ── Run all conditions ────────────────────────────────────────────
+        _abl_all = []
+        _sep60 = '─' * 60
+
+        # ── Augmentation impact: no-aug vs. with-aug ────────────────────
+        logger.info(f"\n{'═'*60}")
+        logger.info("  WB/NB AUGMENTATION IMPACT (Combined GT — Rank + Final)")
+        logger.info(f"{'═'*60}")
+
+        logger.info(f"\n  [Aug A] No WB Augmentation (real data only)")
+        _res_noaug = _abl_run(
+            'No WB Augmentation', _X_real, _sfs_feats, _y_real,
+            _rank_ev, y_ev_r, at_ev_r,
+            _final_ev, y_ev_f, at_ev_f,
+            _return_preds=True,
+            X_tr_80_df=_X_real_80, y_tr_80=_y_real_80)
+        _rows_noaug, _preds_noaug, _ytrue_noaug, _at_noaug = _res_noaug
+
+        logger.info(f"\n  [Aug B] With WB Augmentation (SFS + synthetic)")
+        _res_aug = _abl_run(
+            'With WB Augmentation', _X_aug, _sfs_feats, _y_aug,
+            _rank_ev, y_ev_r, at_ev_r,
+            _final_ev, y_ev_f, at_ev_f,
+            _return_preds=True,
+            X_tr_80_df=_X_aug_80, y_tr_80=_y_aug_80)
+        _rows_aug, _preds_aug, _ytrue_aug, _at_aug = _res_aug
+
+        _aug_cmp_df = pd.DataFrame(_rows_noaug + _rows_aug)
+        _aug_cmp_out = os.path.join(RESULTS_DIR, 'augmentation_wb_nb_gt_results.csv')
+        _aug_cmp_df.to_csv(_aug_cmp_out, index=False)
+        logger.info(f"\n[+] Augmentation WB/NB GT results → {_aug_cmp_out}")
+
+        # ── Per-aircraft GT metrics (with augmentation) ─────────────────
+        _at_aug_arr = _at_aug.values if hasattr(_at_aug, 'values') else np.array(_at_aug)
+        _ac_dict = {}
+        for _ac, _yt, _yp in zip(_at_aug_arr, _ytrue_aug, _preds_aug):
+            _ac_dict.setdefault(_ac, {'yt': [], 'yp': []})
+            _ac_dict[_ac]['yt'].append(_yt)
+            _ac_dict[_ac]['yp'].append(_yp)
+
+        _ac_rows = []
+        for _ac, _vals in sorted(_ac_dict.items(), key=lambda x: -len(x[1]['yt'])):
+            _yt_ = np.array(_vals['yt'])
+            _yp_ = np.array(_vals['yp'])
+            _n_  = len(_yt_)
+            _mae_  = float(np.mean(np.abs(_yt_ - _yp_)))
+            _rmse_ = float(np.sqrt(np.mean((_yt_ - _yp_)**2)))
+            _mape_ = float(np.mean(np.abs((_yt_ - _yp_) / (_yt_ + 1e-8))) * 100)
+            _r2_   = float(1 - np.sum((_yt_ - _yp_)**2) /
+                           np.sum((_yt_ - np.mean(_yt_))**2)) if _n_ > 1 else np.nan
+            _ac_rows.append({
+                'aircraft_type': _ac, 'n': _n_,
+                'mean_actual_kg':    float(np.mean(_yt_)),
+                'mean_predicted_kg': float(np.mean(_yp_)),
+                'mae': _mae_, 'rmse': _rmse_, 'mape': _mape_, 'r2': _r2_,
+                'is_widebody': _ac in WIDEBODY_AIRCRAFT,
+            })
+
+        _ac_df = pd.DataFrame(_ac_rows)
+        _ac_out = os.path.join(RESULTS_DIR, 'per_aircraft_gt_metrics.csv')
+        _ac_df.to_csv(_ac_out, index=False)
+        logger.info(f"[+] Per-aircraft GT metrics → {_ac_out}")
+        logger.info(f"\n{'─'*85}")
+        logger.info(f"  {'Aircraft':<8} {'Cat':<3} {'N':>6}  {'mean_act':>9}  {'mean_pred':>9}"
+                    f"  {'MAE':>7}  {'RMSE':>7}  {'R²':>7}")
+        logger.info(f"{'─'*85}")
+        for _, _r in _ac_df.iterrows():
+            _wb = 'WB' if _r['is_widebody'] else 'NB'
+            logger.info(f"  {_r['aircraft_type']:<8} {_wb:<3} {_r['n']:>6,}  "
+                        f"{_r['mean_actual_kg']:>9.1f}  {_r['mean_predicted_kg']:>9.1f}  "
+                        f"{_r['mae']:>7.1f}  {_r['rmse']:>7.1f}  {_r['r2']:>7.4f}")
+        logger.info(f"{'─'*85}")
+
+        # -- Val per-aircraft metrics (rank-1 model, 20% hold-out) --
+        if _best_val_pred_kg is not None:
+            _at_val_arr = _at_val.values if hasattr(_at_val, 'values') else np.array(_at_val)
+            _ac_val_dict = {}
+            for _ac_v, _yt_v, _yp_v in zip(_at_val_arr, y_val, _best_val_pred_kg):
+                _ac_val_dict.setdefault(_ac_v, {'yt': [], 'yp': []})
+                _ac_val_dict[_ac_v]['yt'].append(_yt_v)
+                _ac_val_dict[_ac_v]['yp'].append(_yp_v)
+            for _ac_r in _ac_rows:
+                _ac = _ac_r['aircraft_type']
+                _vals_v = _ac_val_dict.get(_ac)
+                if _vals_v is None or len(_vals_v['yt']) < 5:
+                    _ac_r.update({'val_n': 0, 'val_mae': np.nan,
+                                  'val_rmse': np.nan, 'val_mape': np.nan,
+                                  'val_r2': np.nan})
+                    continue
+                _yt_a = np.array(_vals_v['yt'])
+                _yp_a = np.array(_vals_v['yp'])
+                _ac_r['val_n']    = len(_yt_a)
+                _ac_r['val_mae']  = float(np.mean(np.abs(_yt_a - _yp_a)))
+                _ac_r['val_rmse'] = float(np.sqrt(np.mean((_yt_a - _yp_a)**2)))
+                _ac_r['val_mape'] = float(
+                    np.mean(np.abs((_yt_a - _yp_a) / (_yt_a + 1e-8))) * 100)
+                _ac_r['val_r2']   = float(
+                    1 - np.sum((_yt_a - _yp_a)**2) /
+                    np.sum((_yt_a - np.mean(_yt_a))**2))
+            _ac_df = pd.DataFrame(_ac_rows)  # re-create with val columns
+            _ac_df.to_csv(_ac_out, index=False)
+
+        # ── Mean actual vs predicted per aircraft type ───────────────────
+        try:
+            _ac_plot = _ac_df[_ac_df['n'] >= 10].sort_values('mean_actual_kg', ascending=False)
+            _fig, _ax = plt.subplots(figsize=(14, 6))
+            _x  = np.arange(len(_ac_plot))
+            _w  = 0.35
+            _ax.bar(_x - _w/2, _ac_plot['mean_actual_kg'],    _w,
+                    label='Actual',    color='steelblue',  alpha=0.85)
+            _ax.bar(_x + _w/2, _ac_plot['mean_predicted_kg'], _w,
+                    label='Predicted', color='darkorange', alpha=0.85)
+            _ax.set_xticks(_x)
+            _ax.set_xticklabels(_ac_plot['aircraft_type'], rotation=45, ha='right', fontsize=10)
+            _ax.set_ylabel('Mean Fuel Consumption per Segment (kg)', fontsize=12)
+            _ax.set_title(
+                'Mean Actual vs Predicted Fuel per Aircraft Type\n'
+                '(Combined GT — Rank + Final datasets, With WB Augmentation)',
+                fontsize=13)
+            _ax.legend(fontsize=11)
+            _ax.yaxis.grid(True, alpha=0.4)
+            _ax.set_axisbelow(True)
+            for _xi, (_, _row) in zip(_x, _ac_plot.iterrows()):
+                _ymax = max(_row['mean_actual_kg'], _row['mean_predicted_kg'])
+                _ax.text(_xi, _ymax * 1.015, f"MAE={_row['mae']:.0f}",
+                         ha='center', va='bottom', fontsize=7.5, color='dimgray')
+            _fig.tight_layout()
+            _ppath = os.path.join(RESULTS_DIR, 'per_aircraft_actual_vs_predicted.png')
+            _fig.savefig(_ppath, dpi=150, bbox_inches='tight')
+            plt.close(_fig)
+            logger.info(f"[+] Per-aircraft plot → {_ppath}")
+        except Exception as _pe:
+            logger.warning(f"[!] Per-aircraft plot failed: {_pe}")
+
+        # ── Per-haul metrics (GT: combined rank+final) ────────────────────
+        try:
+            _haul_bins   = [0, 3 * 3600, 6 * 3600, float('inf')]
+            _haul_labels = ['Short', 'Medium', 'Long']
+
+            # GT haul bins from _comb_ev
+            _gt_dur = _comb_ev.get('flight_duration_seconds',
+                                   pd.Series(np.nan, index=_comb_ev.index))
+            _gt_haul = pd.cut(_gt_dur, bins=_haul_bins,
+                              labels=_haul_labels, right=True)
+
+            _haul_rows = []
+            for _hl in _haul_labels:
+                _msk_h = (_gt_haul == _hl).values
+                if _msk_h.sum() < 5:
+                    continue
+                _yt_h = _comb_gt[_msk_h]
+                _yp_h = _prod_preds[_msk_h]
+                _haul_rows.append({
+                    'haul': _hl,
+                    'n':    int(_msk_h.sum()),
+                    'mae':  float(np.mean(np.abs(_yt_h - _yp_h))),
+                    'rmse': float(np.sqrt(np.mean((_yt_h - _yp_h)**2))),
+                    'mape': float(np.mean(np.abs((_yt_h - _yp_h) / (_yt_h + 1e-8))) * 100),
+                    'r2':   float(1 - np.sum((_yt_h - _yp_h)**2) /
+                                  np.sum((_yt_h - np.mean(_yt_h))**2)),
+                })
+
+            # Val haul bins — use the _flight_dur_s carry-along column
+            # (set on df_features before the augment concat, so it's in df_features_augmented)
+            _val_dur_s = df_features_augmented.loc[X_val.index, '_flight_dur_s'].values \
+                if '_flight_dur_s' in df_features_augmented.columns \
+                else np.full(len(X_val), np.nan)
+            _val_haul = pd.cut(_val_dur_s, bins=_haul_bins,
+                               labels=_haul_labels, right=True)
+
+            if _best_val_pred_kg is not None:
+                for _hr in _haul_rows:
+                    _hl = _hr['haul']
+                    _msk_v = (_val_haul == _hl)
+                    if _msk_v.sum() < 5:
+                        _hr.update({'val_n': 0, 'val_mae': np.nan,
+                                    'val_rmse': np.nan, 'val_r2': np.nan})
+                        continue
+                    _yt_v = y_val[np.asarray(_msk_v)]
+                    _yp_v = _best_val_pred_kg[np.asarray(_msk_v)]
+                    _hr['val_n']    = int(_msk_v.sum())
+                    _hr['val_mae']  = float(np.mean(np.abs(_yt_v - _yp_v)))
+                    _hr['val_rmse'] = float(np.sqrt(np.mean((_yt_v - _yp_v)**2)))
+                    _hr['val_r2']   = float(1 - np.sum((_yt_v - _yp_v)**2) /
+                                            np.sum((_yt_v - np.mean(_yt_v))**2))
+
+            _haul_df  = pd.DataFrame(_haul_rows)
+            _haul_out = os.path.join(RESULTS_DIR, 'per_haul_gt_metrics.csv')
+            _haul_df.to_csv(_haul_out, index=False)
+            logger.info(f"[+] Per-haul GT metrics → {_haul_out}")
+            logger.info(f"\n{'─'*80}")
+            logger.info(f"  {'Haul':<8} {'GT N':>7}  {'MAE':>7}  {'RMSE':>7}  {'R²':>7}"
+                        f"  {'Val N':>7}  {'Val MAE':>8}  {'Val RMSE':>9}  {'Val R²':>7}")
+            logger.info(f"{'─'*80}")
+            for _, _rh in _haul_df.iterrows():
+                logger.info(
+                    f"  {_rh['haul']:<8} {int(_rh['n']):>7,}  "
+                    f"{_rh['mae']:>7.1f}  {_rh['rmse']:>7.1f}  {_rh['r2']:>7.4f}  "
+                    f"{int(_rh.get('val_n',0)):>7,}  {_rh.get('val_mae',float('nan')):>8.1f}  "
+                    f"{_rh.get('val_rmse',float('nan')):>9.1f}  "
+                    f"{_rh.get('val_r2',float('nan')):>7.4f}")
+            logger.info(f"{'─'*80}")
+        except Exception as _hle:
+            logger.warning(f"[!] Per-haul GT metrics failed: {_hle}")
+            import traceback; logger.warning(traceback.format_exc())
+
+        # ── Baseline comparison: Val (20%) + Combined GT ─────────────────
+        logger.info(f"\n{'═'*70}")
+        logger.info("  BASELINE COMPARISON (Val 20% hold-out  +  Combined GT)")
+        logger.info(f"{'═'*70}")
+        try:
+            from sklearn.linear_model import Ridge as _Ridge
+            from sklearn.ensemble import RandomForestRegressor as _RandomForest
+            import lightgbm as _lgb
+
+            _bl_comb_ev = pd.concat([_rank_ev, _final_ev], ignore_index=True)
+            _bl_gt      = np.concatenate([y_ev_r, y_ev_f])
+
+            def _bl_metrics_row(model_label, split_label, y_true, y_pred):
+                _mae_  = float(np.mean(np.abs(y_true - y_pred)))
+                _rmse_ = float(np.sqrt(np.mean((y_true - y_pred)**2)))
+                _mape_ = float(np.mean(np.abs((y_true - y_pred) / (y_true + 1e-8))) * 100)
+                _r2_   = float(1 - np.sum((y_true - y_pred)**2) /
+                               np.sum((y_true - np.mean(y_true))**2))
+                return {'model': model_label, 'split': split_label, 'n': len(y_true),
+                        'mae': _mae_, 'rmse': _rmse_, 'mape': _mape_, 'r2': _r2_}
+
+            def _bl_train_pred(Xtr_df, feat_list, y_tr_raw, Xev_df, mdl, log_target=True):
+                """Fit mdl on Xtr_df[feat_list], predict on Xev_df; returns kg-scale preds."""
+                _f = [c for c in feat_list
+                      if c in Xtr_df.columns and not Xtr_df[c].isna().all()]
+                _Xt = Xtr_df[_f].copy().replace([np.inf, -np.inf], np.nan)
+                _Xe = Xev_df.reindex(columns=_f, fill_value=np.nan).copy().replace([np.inf, -np.inf], np.nan)
+                _nf = [c for c in _f if pd.api.types.is_numeric_dtype(_Xt[c])]
+                _cf = [c for c in _f if c not in _nf]
+                if _nf:
+                    _ni = SimpleImputer(strategy='mean')
+                    _Xt[_nf] = _ni.fit_transform(_Xt[_nf])
+                    _Xe[_nf] = _ni.transform(_Xe[_nf])
+                else:
+                    _ni = None
+                if _cf:
+                    _ci = SimpleImputer(strategy='most_frequent')
+                    _Xt[_cf] = _ci.fit_transform(_Xt[_cf])
+                    _Xe[_cf] = _ci.transform(_Xe[_cf])
+                    _ce = OrdinalEncoder(handle_unknown='use_encoded_value', unknown_value=-1)
+                    _Xt[_cf] = _ce.fit_transform(_Xt[_cf])
+                    _Xe[_cf] = _ce.transform(_Xe[_cf])
+                _sc = StandardScaler()
+                _Xt_s = _sc.fit_transform(_Xt)
+                _Xe_s = _sc.transform(_Xe)
+                _yt = np.log1p(y_tr_raw) if log_target else y_tr_raw
+                _t0 = time.time()
+                mdl.fit(_Xt_s, _yt)
+                logger.info(f"      trained in {time.time()-_t0:.0f}s  ({len(_f)} feats, {len(_Xt):,} rows)")
+                _raw = mdl.predict(_Xe_s)
+                return np.maximum(np.expm1(_raw), 0) if log_target else np.maximum(_raw, 0)
+
+            # Val: X_train (80% aug) → X_val (20% aug); GT: _X_aug (100%) → combined hidden GT
+            _X_train_sfs = X_train[_sfs_feats] if all(c in X_train.columns for c in _sfs_feats) \
+                           else X_train.reindex(columns=_sfs_feats, fill_value=np.nan)
+            _X_val_sfs   = X_val[_sfs_feats]   if all(c in X_val.columns   for c in _sfs_feats) \
+                           else X_val.reindex(columns=_sfs_feats, fill_value=np.nan)
+            _X_train_all = X_train[feature_cols_selected] if all(c in X_train.columns for c in feature_cols_selected) \
+                           else X_train.reindex(columns=feature_cols_selected, fill_value=np.nan)
+            _X_val_all   = X_val[feature_cols_selected]   if all(c in X_val.columns   for c in feature_cols_selected) \
+                           else X_val.reindex(columns=feature_cols_selected, fill_value=np.nan)
+
+            _bl_rows = []
+
+            # ── 1. OpenAP FuelFlow (physics, precomputed) ──────────────────
+            # Val: look up openap_fuel_kg from df_features_augmented by index
+            _oap_val_col = 'openap_fuel_kg' if 'openap_fuel_kg' in df_features_augmented.columns else None
+            if _oap_val_col:
+                _oap_val_vals = df_features_augmented.loc[X_val.index, _oap_val_col].values.astype(float)
+                _vld_v = ~np.isnan(_oap_val_vals)
+                if _vld_v.sum() > 0:
+                    _bl_rows.append(_bl_metrics_row('OpenAP FuelFlow (physics)', 'Val',
+                                                    y_val[_vld_v], _oap_val_vals[_vld_v]))
+            # GT: openap from merged eval frame
+            _oap_bl_col = next((c for c in ['openap_fuel_kg', 'openap_pred_kg', 'openap_segment_fuel']
+                                if c in _bl_comb_ev.columns), None)
+            if _oap_bl_col:
+                _oap_bl = _bl_comb_ev[_oap_bl_col].values.astype(float)
+                _vld_g = ~np.isnan(_oap_bl)
+                if _vld_g.sum() > 0:
+                    _bl_rows.append(_bl_metrics_row('OpenAP FuelFlow (physics)', 'GT',
+                                                    _bl_gt[_vld_g], _oap_bl[_vld_g]))
+            if not _oap_val_col and not _oap_bl_col:
+                logger.info("  OpenAP column not found — skipping")
+
+            # ── 2. Ridge Regression ────────────────────────────────────────
+            logger.info("  Training Ridge Regression (Val) …")
+            _bl_rows.append(_bl_metrics_row('Ridge Regression', 'Val', y_val,
+                _bl_train_pred(_X_train_sfs, _sfs_feats, y_train, _X_val_sfs, _Ridge(alpha=1.0))))
+            logger.info("  Training Ridge Regression (GT) …")
+            _bl_rows.append(_bl_metrics_row('Ridge Regression', 'GT', _bl_gt,
+                _bl_train_pred(_X_aug, _sfs_feats, _y_aug, _bl_comb_ev, _Ridge(alpha=1.0))))
+
+            # ── 3. Random Forest ───────────────────────────────────────────
+            logger.info("  Training Random Forest (Val) …")
+            _bl_rows.append(_bl_metrics_row('Random Forest', 'Val', y_val,
+                _bl_train_pred(_X_train_sfs, _sfs_feats, y_train, _X_val_sfs,
+                               _RandomForest(n_estimators=300, max_depth=20,
+                                             min_samples_leaf=2, n_jobs=-1, random_state=42))))
+            logger.info("  Training Random Forest (GT) …")
+            _bl_rows.append(_bl_metrics_row('Random Forest', 'GT', _bl_gt,
+                _bl_train_pred(_X_aug, _sfs_feats, _y_aug, _bl_comb_ev,
+                               _RandomForest(n_estimators=300, max_depth=20,
+                                             min_samples_leaf=2, n_jobs=-1, random_state=42))))
+
+            # ── 4. LightGBM ────────────────────────────────────────────────
+            logger.info("  Training LightGBM (Val) …")
+            _bl_rows.append(_bl_metrics_row('LightGBM', 'Val', y_val,
+                _bl_train_pred(_X_train_sfs, _sfs_feats, y_train, _X_val_sfs,
+                               _lgb.LGBMRegressor(n_estimators=500, learning_rate=0.05,
+                                                  num_leaves=63, n_jobs=-1, random_state=42,
+                                                  verbosity=-1))))
+            logger.info("  Training LightGBM (GT) …")
+            _bl_rows.append(_bl_metrics_row('LightGBM', 'GT', _bl_gt,
+                _bl_train_pred(_X_aug, _sfs_feats, _y_aug, _bl_comb_ev,
+                               _lgb.LGBMRegressor(n_estimators=500, learning_rate=0.05,
+                                                  num_leaves=63, n_jobs=-1, random_state=42,
+                                                  verbosity=-1))))
+
+            # ── 5. XGBoost reference (legacy params, no SFS) ───────────────
+            logger.info("  Training XGBoost reference (Val) …")
+            _bl_rows.append(_bl_metrics_row('XGBoost (reference, no SFS)', 'Val', y_val,
+                _bl_train_pred(_X_train_all, feature_cols_selected, y_train, _X_val_all,
+                               XGBRegressor(random_state=42, objective='reg:squarederror',
+                                            tree_method='hist', device=_DEVICE,
+                                            n_jobs=-1, verbosity=0, **dict(legacy_params)))))
+            logger.info("  Training XGBoost reference (GT) …")
+            _Xtr_all_bl = df_features_augmented[feature_cols_selected].copy()
+            _bl_rows.append(_bl_metrics_row('XGBoost (reference, no SFS)', 'GT', _bl_gt,
+                _bl_train_pred(_Xtr_all_bl, feature_cols_selected, _y_aug, _bl_comb_ev,
+                               XGBRegressor(random_state=42, objective='reg:squarederror',
+                                            tree_method='hist', device=_DEVICE,
+                                            n_jobs=-1, verbosity=0, **dict(legacy_params)))))
+
+            # ── 6. XGBoost proposed ────────────────────────────────────────
+            # Val: reuse rank-1 val predictions from Phase 5; fallback to fresh retrain
+            _xgb_val_preds_kg = _best_val_pred_kg \
+                if (_best_val_pred_kg is not None and len(_best_val_pred_kg) == len(y_val)) \
+                else None
+            if _xgb_val_preds_kg is None:
+                logger.info("  Training XGBoost proposed (Val, fresh) …")
+                _xgb_val_preds_kg = _bl_train_pred(
+                    _X_train_sfs, _sfs_feats, y_train, _X_val_sfs,
+                    XGBRegressor(random_state=42, objective='reg:squarederror',
+                                 tree_method='hist', device=_DEVICE,
+                                 n_jobs=-1, verbosity=0, **dict(legacy_params)))
+            _bl_rows.append(_bl_metrics_row('XGBoost (proposed)', 'Val', y_val, _xgb_val_preds_kg))
+            # GT: production rank-1 predictions, fallback to with-aug ablation preds
+            _xgb_gt_preds = _prod_preds_bl if _prod_preds_bl is not None else _preds_aug
+            _bl_rows.append(_bl_metrics_row('XGBoost (proposed)', 'GT', _bl_gt, _xgb_gt_preds))
+
+            _bl_df = pd.DataFrame(_bl_rows)
+            _bl_out = os.path.join(RESULTS_DIR, 'baseline_comparison_gt.csv')
+            _bl_df.to_csv(_bl_out, index=False)
+            logger.info(f"\n[+] Baseline comparison (Val + GT) → {_bl_out}")
+            logger.info(f"\n{'─'*90}")
+            logger.info(f"  {'Model':<35} {'Split':<6} {'N':>7}  {'MAE':>7}  {'RMSE':>7}  {'MAPE%':>7}  {'R²':>7}")
+            logger.info(f"{'─'*90}")
+            for _, _rw in _bl_df.iterrows():
+                logger.info(f"  {_rw['model']:<35} {_rw['split']:<6} {_rw['n']:>7,}  "
+                            f"{_rw['mae']:>7.1f}  {_rw['rmse']:>7.1f}  "
+                            f"{_rw['mape']:>7.2f}  {_rw['r2']:>7.4f}")
+            logger.info(f"{'─'*90}")
+        except Exception as _ble:
+            logger.warning(f"[!] Baseline comparison failed: {_ble}")
+            import traceback; logger.warning(traceback.format_exc())
+
+        # ── Contribution ablation conditions (Combined GT) ────────────────
+        logger.info(f"\n{'═'*60}")
+        logger.info("  CONTRIBUTION ABLATION (Combined GT — Rank + Final)")
+        logger.info(f"{'═'*60}")
+
+        logger.info(f"\n{_sep60}\n  [1/5] No Synthetic (SFS only)")
+        _abl_all += _abl_run('No Synthetic (SFS only)',
+                             _X_real, _sfs_feats, _y_real,
+                             _rank_ev, y_ev_r, at_ev_r,
+                             _final_ev, y_ev_f, at_ev_f,
+                             X_tr_80_df=_X_real_80, y_tr_80=_y_real_80)
+
+        if _c1_ok:
+            logger.info(f"\n{_sep60}\n  [2/5] SFS + Synthetic + METAR (+C1)")
+            _abl_all += _abl_run('SFS + Synthetic + METAR (+C1)',
+                                 _X_aug_m, _fc_m, _y_aug_m,
+                                 _rank_ev_m, y_ev_r, at_ev_r,
+                                 _final_ev_m, y_ev_f, at_ev_f,
+                                 X_tr_80_df=_X_aug_80, y_tr_80=_y_aug_80)
+
+        if _LF_COLS:
+            logger.info(f"\n{_sep60}\n  [3/5] SFS + Synthetic - Load Factor (-C2)")
+            _fc_no_lf = [c for c in _sfs_feats if c not in _LF_COLS]
+            _abl_all += _abl_run('SFS + Synthetic - Load Factor (-C2)',
+                                 _X_aug[_fc_no_lf], _fc_no_lf, _y_aug,
+                                 _rank_ev, y_ev_r, at_ev_r,
+                                 _final_ev, y_ev_f, at_ev_f,
+                                 X_tr_80_df=X_train.reindex(
+                                     columns=_fc_no_lf, fill_value=np.nan),
+                                 y_tr_80=y_train)
+
+        if _c3_ok:
+            logger.info(f"\n{_sep60}\n  [4/5] SFS + Synthetic + Static Est. TOW (-C3)")
+            _abl_all += _abl_run('SFS + Synthetic + Static Est. TOW (-C3)',
+                                 _X_c3, _sfs_feats, _y_aug,
+                                 _rank_ev_c3, y_ev_r, at_ev_r,
+                                 _final_ev_c3, y_ev_f, at_ev_f,
+                                 X_tr_80_df=_X_c3_80, y_tr_80=_y_aug_80)
+
+        if _c4_ok:
+            logger.info(f"\n{_sep60}\n  [5/5] SFS + Synthetic + Corrected Elapsed (+C4)")
+            _abl_all += _abl_run('SFS + Synthetic + Corrected Elapsed (+C4)',
+                                 _X_c4, _fc_c4, _y_aug,
+                                 _rank_ev, y_ev_r, at_ev_r,
+                                 _final_ev, y_ev_f, at_ev_f,
+                                 X_tr_80_df=_X_c4_80, y_tr_80=_y_aug_80)
+
+        # ── Summary table ─────────────────────────────────────────────────
+        _abl_df = pd.DataFrame(_abl_all)
+        logger.info("\n" + "=" * 100)
+        logger.info(f"{'Condition':<45} {'Dataset':<10} {'Split':<14}"
+                    f" {'N':>7} {'MAE':>8} {'RMSE':>8} {'R²':>8}")
+        logger.info("-" * 100)
+        for _, _r in _abl_df.iterrows():
+            logger.info(f"{_r['condition']:<45} {_r['dataset']:<10} {_r['split']:<14}"
+                        f" {_r['n']:>7,} {_r['mae']:>8.1f} {_r['rmse']:>8.1f} {_r['r2']:>8.4f}")
+        logger.info("=" * 100)
+
+        # Delta-MAE vs No Synthetic baseline (Combined Overall)
+        _brow = _abl_df[(_abl_df['condition'] == 'No Synthetic (SFS only)') &
+                        (_abl_df['dataset'] == 'Combined') &
+                        (_abl_df['split'] == 'Overall')]
+        if not _brow.empty:
+            _bmae = _brow.iloc[0]['mae']
+            logger.info(f"\nDelta-MAE vs. No Synthetic [Combined] (Overall):")
+            for _, _r in _abl_df[(_abl_df['dataset'] == 'Combined') &
+                                  (_abl_df['split'] == 'Overall')].iterrows():
+                if _r['condition'] != 'No Synthetic (SFS only)':
+                    _d = _r['mae'] - _bmae
+                    logger.info(f"  {_r['condition']:<45}  dMAE={_d:+.1f} ({_d/_bmae*100:+.2f}%)")
+
+        _abl_out = os.path.join(RESULTS_DIR, 'ablation_contributions_results.csv')
+        _abl_df.to_csv(_abl_out, index=False)
+        logger.info(f"\n[+] Ablation results saved to: {_abl_out}")
 
     # PHASE 9: Performance Summary
     logger.info("\n" + "="*70)
@@ -1379,21 +2240,24 @@ def main(gpu_id=0, force_sfs=False, force_synthetic=False, opt_mode='legacy'):
     summary_df = pd.DataFrame(submission_files)
     summary_path = os.path.join(RESULTS_DIR, 'final_top5_models_synthetic_summary.csv')
     summary_df.to_csv(summary_path, index=False)
-    
-    logger.info("\n" + "="*70)
+
+    logger.info("\n" + "="*90)
     logger.info("TOP 5 MODELS SUMMARY")
-    logger.info("="*70)
-    logger.info("\n| Rank | Val RMSE | Train RMSE | Test Mean | Test Std  | Submission File |")
-    logger.info("|------|----------|------------|-----------|-----------|-----------------|")
-    
+    logger.info("="*90)
+    logger.info("\n| Rank | Val RMSE | Train RMSE | GT Rank  | GT Final | GT Combined | Test Mean | Submission File |")
+    logger.info("|------|----------|------------|----------|----------|-------------|-----------|-----------------|")
+
     for _, row in summary_df.iterrows():
         filename = os.path.basename(row['parquet_file'])
+        def _fmt(v):
+            return f"{v:8.4f}" if not (isinstance(v, float) and np.isnan(v)) else "     N/A"
         logger.info(
-            f"|  {row['rank']:2d}  | {row['val_rmse']:8.4f} | {row['train_rmse_100pct']:10.4f} | "
-            f"{row['test_mean']:9.2f} | {row['test_std']:9.2f} | {filename[:30]}... |"
+            f"|  {row['rank']:2d}  | {_fmt(row['val_rmse'])} | {_fmt(row['train_rmse_100pct'])} | "
+            f"{_fmt(row['gt_rank_rmse'])} | {_fmt(row['gt_final_rmse'])} | "
+            f"  {_fmt(row['gt_combined_rmse'])} | {row['test_mean']:9.2f} | {filename[:30]}... |"
         )
-    
-    logger.info("="*70)
+
+    logger.info("="*90)
     
     # PHASE 10: Visualization & Reporting
     logger.info("\n" + "="*70)
