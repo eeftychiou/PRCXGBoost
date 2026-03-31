@@ -9,6 +9,7 @@ import json
 import logging
 import argparse
 import time
+import joblib
 from math import radians, cos, sin, asin, sqrt
 
 import numpy as np
@@ -41,6 +42,15 @@ FEATURED_DATA_TRAIN = os.path.join(config.PROCESSED_DATA_DIR, 'featured_data_tra
 FEATURED_DATA_TEST  = os.path.join(config.PROCESSED_DATA_DIR, 'featured_data_final.parquet')
 SYNTHETIC_PATH          = config.SYNTHETIC_WIDEBODY_PATH
 SELECTED_FEATURES_PATH  = config.SELECTED_FEATURES_PATH
+
+# Ground-truth evaluation datasets (available after competition reveal)
+FEATURED_DATA_RANK_PATH  = os.path.join(config.PROCESSED_DATA_DIR, 'featured_data_rank.parquet')
+FEATURED_DATA_FINAL_PATH = os.path.join(config.PROCESSED_DATA_DIR, 'featured_data_final.parquet')
+FUEL_RANK_GT_PATH        = os.path.join(config.BASE_DATASETS_DIR, 'fuel_rank.parquet')
+FUEL_FINAL_GT_PATH       = os.path.join(config.BASE_DATASETS_DIR, 'fuel_final.parquet')
+AUGMENTED_RANK_CSV_PATH  = config.AUGMENTED_RANK_CSV
+AUGMENTED_FINAL_CSV_PATH = config.AUGMENTED_FINAL_TEST_CSV
+SAVED_MODEL_DIR          = os.path.join('models', 'legacy', 'final_xgb_model_rank1')
 
 OUTPUT_CSV = os.path.join(config.PROCESSED_DATA_DIR, 'ablation_augmentation_results.csv')
 
@@ -120,8 +130,9 @@ def preprocess(X_train_df, X_val_df, X_aug_df):
     Fit imputer / encoder / scaler on X_train_df (real train only), then
     transform val and augmented sets with the same fitted objects.
 
-    Returns (X_train_proc, X_val_proc, X_aug_proc, feature_cols_out)
-    After encoding, all columns are numeric.
+    Returns (X_train_proc, X_val_proc, X_aug_proc, feature_cols_out, transformers)
+    After encoding, all columns are numeric. `transformers` can be passed to
+    apply_transformers_to_eval() for inference on new datasets.
     """
     feature_cols = list(X_train_df.columns)
 
@@ -144,6 +155,7 @@ def preprocess(X_train_df, X_val_df, X_aug_df):
     X_au = X_aug_df.copy()
 
     # Numeric imputation
+    num_imp = None
     if numerical_features:
         num_imp = SimpleImputer(strategy='mean')
         X_tr[numerical_features] = num_imp.fit_transform(X_tr[numerical_features])
@@ -151,6 +163,7 @@ def preprocess(X_train_df, X_val_df, X_aug_df):
         X_au[numerical_features] = num_imp.transform(X_au[numerical_features])
 
     # Categorical pipeline
+    cat_imp = enc = None
     if categorical_features:
         cat_imp = SimpleImputer(strategy='most_frequent')
         X_tr[categorical_features] = cat_imp.fit_transform(X_tr[categorical_features])
@@ -168,8 +181,18 @@ def preprocess(X_train_df, X_val_df, X_aug_df):
     X_vl_s = scaler.transform(X_vl)
     X_au_s = scaler.transform(X_au)
 
-    out_cols = numerical_features + categorical_features
-    return X_tr_s, X_vl_s, X_au_s, out_cols
+    out_cols = list(X_tr.columns)  # preserve original column order (matches scaler fit)
+    transformers = {
+        'num_imputer':        num_imp,
+        'cat_imputer':        cat_imp,
+        'cat_encoder':        enc,
+        'scaler':             scaler,
+        'numerical_features': numerical_features,
+        'categorical_features': categorical_features,
+        'nan_cols':           nan_cols,
+        'out_cols':           out_cols,
+    }
+    return X_tr_s, X_vl_s, X_au_s, out_cols, transformers
 
 
 def metrics(y_true, y_pred):
@@ -178,6 +201,104 @@ def metrics(y_true, y_pred):
     mape = np.mean(np.abs((y_true - y_pred) / (y_true + 1e-8))) * 100
     r2   = 1 - np.sum((y_true - y_pred)**2) / np.sum((y_true - y_true.mean())**2)
     return dict(mae=mae, rmse=rmse, mape=mape, r2=r2)
+
+
+def apply_transformers_to_eval(X_df, transformers):
+    """
+    Apply fitted preprocessing transformers (from preprocess()) to a new
+    evaluation dataset.  Columns missing from X_df are filled with NaN and
+    will be handled by the imputer (which uses training-set means).
+    """
+    out_cols    = transformers['out_cols']          # ordered columns scaler expects
+    num_cols    = transformers['numerical_features']
+    cat_cols    = transformers['categorical_features']
+    num_imp     = transformers['num_imputer']
+    cat_imp     = transformers['cat_imputer']
+    cat_enc     = transformers['cat_encoder']
+    scaler      = transformers['scaler']
+
+    # Reindex to the exact column order/set the scaler was fitted on
+    X = X_df.reindex(columns=out_cols, fill_value=np.nan).copy()
+
+    if num_cols and num_imp is not None:
+        X[num_cols] = num_imp.transform(X[num_cols])
+    if cat_cols and cat_imp is not None:
+        X[cat_cols] = cat_imp.transform(X[cat_cols])
+        X[cat_cols] = cat_enc.transform(X[cat_cols])
+
+    return scaler.transform(X)
+
+
+def apply_saved_preprocessor(X_df, preprocessors):
+    """
+    Apply the saved XGBoostTraining_Final preprocessor pipeline to a DataFrame,
+    returning the scaled, SFS-selected feature array that the production model expects.
+    """
+    feat_cols = preprocessors['feature_cols_selected']
+    num_cols  = preprocessors['numerical_features']
+    cat_cols  = preprocessors['categorical_features']
+    X = X_df.reindex(columns=feat_cols, fill_value=np.nan).copy()
+    if num_cols:
+        X[num_cols] = preprocessors['num_imputer_full'].transform(X[num_cols])
+    if cat_cols:
+        X[cat_cols] = preprocessors['cat_imputer_full'].transform(X[cat_cols])
+        X[cat_cols] = preprocessors['cat_encoder_full'].transform(X[cat_cols])
+    X_scaled = preprocessors['scaler_full'].transform(X)
+    return X_scaled[:, preprocessors['selected_mask']]
+
+
+def load_eval_dataset(feat_parquet_path, fuel_gt_path, aug_csv_path=None):
+    """
+    Build an evaluation dataset for rank or final:
+      * feat_parquet_path : featured_data_rank/final.parquet (trajectory features)
+      * fuel_gt_path      : fuel_rank/final.parquet (ground-truth fuel_kg)
+      * aug_csv_path      : optional augmented CSV for OpenAP interval features
+                            (starting_mass_kg, alt_end_ft, …)
+    Returns (data_df, y_true, aircraft_types_series)
+    """
+    feat    = pd.read_parquet(feat_parquet_path)
+    fuel_gt = pd.read_parquet(fuel_gt_path)
+
+    # Attach ground-truth per segment
+    data = feat.merge(fuel_gt[['flight_id', 'idx', 'fuel_kg']],
+                      on=['flight_id', 'idx'], how='inner', suffixes=('', '_gt'))
+    if 'fuel_kg_gt' in data.columns:
+        data['fuel_kg'] = data['fuel_kg_gt']
+        data = data.drop(columns=['fuel_kg_gt'])
+
+    # Optionally enrich with augmented CSV (provides starting_mass_kg etc.)
+    if aug_csv_path and os.path.exists(aug_csv_path):
+        df_aug = pd.read_csv(aug_csv_path, low_memory=False)
+        aug_key = 'interval_idx' if 'interval_idx' in df_aug.columns else 'idx'
+        df_aug = df_aug.rename(columns={aug_key: 'idx'})
+        # Only bring columns not already present (avoids duplicate conflicts)
+        new_cols = ['flight_id', 'idx'] + [
+            c for c in df_aug.columns
+            if c not in ('flight_id', 'idx') and c not in data.columns
+        ]
+        data = data.merge(df_aug[new_cols], on=['flight_id', 'idx'], how='left')
+
+    # Compute derived columns if needed (mirrors training data preparation)
+    if 'alt_avg_ft' not in data.columns:
+        data['alt_avg_ft'] = (data.get('alt_start_ft', 0) + data.get('alt_end_ft', 0)) / 2
+    if 'altitude_change_rate' not in data.columns:
+        data['altitude_change_rate'] = (data.get('alt_change_ft', 0)
+                                        / (data.get('interval_duration_sec', 60) + 1e-6))
+    if 'end_hour' not in data.columns:
+        end_col = data.get('end', None)
+        if end_col is not None:
+            data['end_hour'] = (pd.to_datetime(data['end'], errors='coerce')
+                                .dt.hour.fillna(-1).astype(int))
+        else:
+            data['end_hour'] = -1
+    if 'interval_elapsed_from_flight_start' not in data.columns:
+        data['interval_elapsed_from_flight_start'] = 0
+
+    y    = data['fuel_kg'].values.astype(np.float32)
+    at   = data.get('aircraft_type', pd.Series(['unknown'] * len(data)))
+    log.info(f"  Eval dataset: {len(data):,} segments  "
+             f"({(at.isin(WIDEBODY_AIRCRAFT)).sum():,} widebody)")
+    return data, y, at
 
 
 def run(gpu_id=None):
@@ -272,104 +393,44 @@ def run(gpu_id=None):
     df_features = df_features.replace([np.inf, -np.inf], np.nan)
     log.info(f"  Real training intervals: {len(df_features):,}")
 
-    # Real-data split (80/20)
-    log.info("\n[2] Splitting real data into train / val (80/20, random_state=42)...")
-    # Keep aircraft_type for post-hoc breakdown — not as a feature at index level
-    aircraft_type_series = df_features['aircraft_type'].reset_index(drop=True)
+    # Model A — train on narrowbody-only real data (no synthetic, no WB)
+    log.info("\n[2] Filtering real data to narrowbody-only for Model A...")
+    df_features_nb = df_features[~df_features['aircraft_type'].isin(WIDEBODY_AIRCRAFT)].copy()
+    log.info(f"  Narrowbody rows: {len(df_features_nb):,}  "
+             f"(removed {len(df_features) - len(df_features_nb):,} widebody rows)")
+    X_real_nb  = df_features_nb[feature_cols].reset_index(drop=True)
+    y_real_nb  = df_features_nb[target_col].values.astype(np.float32)
 
-    indices = np.arange(len(df_features))
-    train_idx, val_idx = train_test_split(indices, test_size=0.2, random_state=42, shuffle=True)
+    # Preprocessing for Model A — fit on NB-only data
+    log.info("\n[5] Preprocessing Model A (fit on narrowbody data only)...")
+    X_tr_s, _, _, _, transformers_a = preprocess(X_real_nb, X_real_nb, X_real_nb)
+    y_tr_log = np.log1p(y_real_nb)
 
-    X_real = df_features[feature_cols].reset_index(drop=True)
-    y_real = df_features[target_col].values.astype(np.float32)
-
-    X_real_train = X_real.iloc[train_idx].reset_index(drop=True)
-    X_real_val   = X_real.iloc[val_idx].reset_index(drop=True)
-    y_real_train = y_real[train_idx]
-    y_real_val   = y_real[val_idx]
-
-    # Aircraft type labels for the val set (for per-type breakdown)
-    at_val = aircraft_type_series.iloc[val_idx].reset_index(drop=True)
-    is_wb_val = at_val.isin(WIDEBODY_AIRCRAFT).values
-
-    log.info(f"  Train: {len(train_idx):,}  |  Val: {len(val_idx):,}")
-    log.info(f"  Val widebody segments: {is_wb_val.sum():,}  ({is_wb_val.mean()*100:.1f}%)")
-
-    # Synthetic sample generation
-    if os.path.exists(SYNTHETIC_PATH):
-        df_synthetic = pd.read_parquet(SYNTHETIC_PATH)
-        log.info(f"  Loaded cached synthetic data: {len(df_synthetic):,} rows")
-    else:
-        log.warning("  synthetic_widebody.parquet not found — generating now (this is slow).")
-        # Import generation function from the training script
-        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-        from XGBoostTraining_Final import generate_synthetic_widebody_data_enhanced  # noqa
-        df_synthetic = generate_synthetic_widebody_data_enhanced(
-            df_features[feature_cols + [target_col]],
-            n_synthetic=25000, long_segment_pct=0.25, random_state=42)
-        df_synthetic.to_parquet(SYNTHETIC_PATH, index=False, engine='fastparquet')
-        log.info(f"  Generated and cached {len(df_synthetic):,} synthetic rows")
-
-    # Align synthetic columns to feature_cols + target
-    synth_cols = [c for c in feature_cols if c in df_synthetic.columns]
-    missing_synth = [c for c in feature_cols if c not in df_synthetic.columns]
-    if missing_synth:
-        log.warning(f"  Synthetic data missing {len(missing_synth)} feature cols — filling with NaN")
-    X_synthetic = df_synthetic.reindex(columns=feature_cols, fill_value=np.nan)
-    y_synthetic = df_synthetic[target_col].values.astype(np.float32) if target_col in df_synthetic.columns \
-        else df_synthetic.get('actual_fuel_kg', df_synthetic.get('fuel_kg', np.zeros(len(df_synthetic)))).values.astype(np.float32)
-
-    # Augmented training set construction
-    log.info("\n[4] Building augmented training set (real train + synthetic)...")
-    X_aug_train = pd.concat([X_real_train, X_synthetic], ignore_index=True)
-    y_aug_train = np.concatenate([y_real_train, y_synthetic]).astype(np.float32)
-    log.info(f"  Augmented train size: {len(X_aug_train):,}  "
-             f"(+{len(df_synthetic):,} synthetic = {len(df_synthetic)/len(y_real_train)*100:.1f}%)")
-
-    # Preprocessing
-    log.info("\n[5] Preprocessing (fit on real train, transform all sets)...")
-    X_tr_s, X_vl_s, X_au_s, _ = preprocess(X_real_train, X_real_val, X_aug_train)
-
-    y_tr_log  = np.log1p(y_real_train)
-    y_vl      = y_real_val                            # evaluation on original scale
-    y_au_log  = np.log1p(y_aug_train)
-
-    # Baseline training (Train Model A)
-    log.info("\n[6] Training Model A (no synthetic)...")
+    # Train Model A — narrowbody-only, no synthetic
+    log.info("\n[6] Training Model A (narrowbody-only, no synthetic)...")
     t0 = time.time()
     model_a = XGBRegressor(**MODEL_PARAMS)
     model_a.fit(X_tr_s, y_tr_log)
     log.info(f"  Done in {time.time()-t0:.1f}s")
 
-    pred_a_log = model_a.predict(X_vl_s)
-    pred_a = np.maximum(np.expm1(pred_a_log), 0)
+    # Model B — load production model from XGBoostTraining_Final (all data + WB synthetic)
+    log.info(f"\n[7] Loading production Model B from {SAVED_MODEL_DIR} ...")
+    preprocessors_b = joblib.load(os.path.join(SAVED_MODEL_DIR, 'preprocessor.joblib'))
+    model_b         = joblib.load(os.path.join(SAVED_MODEL_DIR, 'model.joblib'))
+    log.info(f"  Loaded model with {len(preprocessors_b['selected_features'])} selected features")
 
-    # Augmented training (Train Model B)
-    log.info("\n[7] Training Model B (real + synthetic)...")
-    t0 = time.time()
-    model_b = XGBRegressor(**MODEL_PARAMS)
-    model_b.fit(X_au_s, y_au_log)
-    log.info(f"  Done in {time.time()-t0:.1f}s")
-
-    pred_b_log = model_b.predict(X_vl_s)
-    pred_b = np.maximum(np.expm1(pred_b_log), 0)
-
-    # Evaluation
-    log.info("\n[8] Computing metrics...")
+    log.info("\n[8] Evaluating on rank / final ground-truth datasets...")
 
     def collect_metrics(y_true, y_pred, label_prefix, aircraft_mask_wb):
         rows = []
-        # Overall
         m = metrics(y_true, y_pred)
         rows.append({'model': label_prefix, 'split': 'Overall', **m,
                      'n_segments': len(y_true)})
-        # Narrowbody
         nb_mask = ~aircraft_mask_wb
         if nb_mask.sum() > 0:
             m = metrics(y_true[nb_mask], y_pred[nb_mask])
             rows.append({'model': label_prefix, 'split': 'Narrowbody', **m,
                          'n_segments': nb_mask.sum()})
-        # Widebody
         if aircraft_mask_wb.sum() > 0:
             m = metrics(y_true[aircraft_mask_wb], y_pred[aircraft_mask_wb])
             rows.append({'model': label_prefix, 'split': 'Widebody', **m,
@@ -377,29 +438,57 @@ def run(gpu_id=None):
         return rows
 
     rows = []
-    rows += collect_metrics(y_vl, pred_a, 'No Augmentation', is_wb_val)
-    rows += collect_metrics(y_vl, pred_b, 'With Augmentation', is_wb_val)
+
+    # [9] Evaluate on rank and final datasets (ground-truth now available)
+    log.info("\n[9] Evaluating on rank and final datasets (ground-truth comparison)...")
+    _eval_datasets = [
+        ('Rank',  FEATURED_DATA_RANK_PATH,  FUEL_RANK_GT_PATH,  AUGMENTED_RANK_CSV_PATH),
+        ('Final', FEATURED_DATA_FINAL_PATH, FUEL_FINAL_GT_PATH, AUGMENTED_FINAL_CSV_PATH),
+    ]
+    for ds_name, feat_path, fuel_path, aug_path in _eval_datasets:
+        if not (os.path.exists(feat_path) and os.path.exists(fuel_path)):
+            log.warning(f"  Skipping {ds_name}: required files not found")
+            continue
+        log.info(f"\n  --- {ds_name} ---")
+        eval_data, y_eval, at_eval = load_eval_dataset(feat_path, fuel_path, aug_path)
+        is_wb_eval = at_eval.isin(WIDEBODY_AIRCRAFT).values
+
+        X_eval_a = apply_transformers_to_eval(eval_data, transformers_a)
+        pred_a_eval = np.maximum(np.expm1(model_a.predict(X_eval_a)), 0)
+
+        X_eval_b = apply_saved_preprocessor(eval_data, preprocessors_b)
+        pred_b_eval = np.maximum(np.expm1(model_b.predict(X_eval_b)), 0)
+
+        rows += collect_metrics(y_eval, pred_a_eval,
+                                f'No WB Data ({ds_name})',            is_wb_eval)
+        rows += collect_metrics(y_eval, pred_b_eval,
+                                f'With WB Augmentation ({ds_name})', is_wb_eval)
 
     results_df = pd.DataFrame(rows)
 
     # Pretty-print results table
-    log.info("\n" + "=" * 72)
-    log.info(f"{'Model':<22} {'Split':<14} {'MAE':>10} {'RMSE':>10} {'MAPE':>8} {'R²':>8} {'N':>8}")
-    log.info("-" * 72)
+    log.info("\n" + "=" * 80)
+    log.info(f"{'Model':<30} {'Split':<14} {'MAE':>10} {'RMSE':>10} {'MAPE':>8} {'R²':>8} {'N':>8}")
+    log.info("-" * 80)
     for _, r in results_df.iterrows():
-        log.info(f"{r['model']:<22} {r['split']:<14} {r['mae']:>10.1f} {r['rmse']:>10.1f} "
+        log.info(f"{r['model']:<30} {r['split']:<14} {r['mae']:>10.1f} {r['rmse']:>10.1f} "
                  f"{r['mape']:>7.2f}% {r['r2']:>8.4f} {int(r['n_segments']):>8,}")
-    log.info("=" * 72)
+    log.info("=" * 80)
 
-    # Improvement summary
-    for split in ['Overall', 'Narrowbody', 'Widebody']:
-        a = results_df[(results_df['model'] == 'No Augmentation') & (results_df['split'] == split)]
-        b = results_df[(results_df['model'] == 'With Augmentation') & (results_df['split'] == split)]
-        if len(a) and len(b):
-            delta = b.iloc[0]['mae'] - a.iloc[0]['mae']
-            pct   = delta / a.iloc[0]['mae'] * 100
-            direction = "improvement" if delta < 0 else "degradation"
-            log.info(f"  {split:14s} MAE change: {delta:+.1f} kg  ({pct:+.2f}%)  ← {direction}")
+    # Improvement summary per dataset
+    for ds_tag in [' (Rank)', ' (Final)']:
+        base_a  = f'No WB Data{ds_tag}'
+        base_b  = f'With WB Augmentation{ds_tag}'
+        ds_label = ds_tag.strip(' ()')
+        log.info(f"\n  [{ds_label}] MAE delta (With Augmentation vs. No Augmentation):")
+        for split in ['Overall', 'Narrowbody', 'Widebody']:
+            a = results_df[(results_df['model'] == base_a) & (results_df['split'] == split)]
+            b = results_df[(results_df['model'] == base_b) & (results_df['split'] == split)]
+            if len(a) and len(b):
+                delta = b.iloc[0]['mae'] - a.iloc[0]['mae']
+                pct   = delta / a.iloc[0]['mae'] * 100
+                direction = 'improvement' if delta < 0 else 'degradation'
+                log.info(f"    {split:14s} MAE {delta:+.1f} kg ({pct:+.2f}%)  ← {direction}")
 
     # Persistence
     os.makedirs(os.path.dirname(OUTPUT_CSV), exist_ok=True)

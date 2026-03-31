@@ -174,7 +174,17 @@ def main():
         best_gpu = get_best_gpu()
         ablation_contributions.run(gpu_id=best_gpu)
     elif args.stage == "evaluate":
-        evaluate_model.main(run_type=args.run_type)
+        if args.run_type == 'evaluate':
+            evaluate_model.main(run_type=args.run_type)
+        else:  # rank or final: retrain and generate submission directly
+            print(f"--- Running XGBoost Training + Submission (run_type='{args.run_type}') [Mode: {args.mode}] ---")
+            best_gpu = get_best_gpu()
+            XGBoostTraining_Final.run(
+                gpu_id=best_gpu,
+                force_sfs=args.force_sfs or args.force,
+                force_synthetic=args.force_synthetic or args.force,
+                opt_mode=args.mode
+            )
 
 if __name__ == "__main__":
     main()

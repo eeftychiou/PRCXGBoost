@@ -6,8 +6,8 @@ This project provides a complete machine learning pipeline to predict fuel consu
 
 ### Key Features
 - **Modular Pipeline**: Each stage (data preparation, training, evaluation) is independent and can be run separately.
-- **Rich Data Integration**: Enriches the core dataset with external sources, including airport data, historical weather (METAR) reports, and regional passenger load factor estimates.
-- **Advanced Feature Engineering**: Creates a wide range of features from raw trajectory data, including flight phase detection (taxi, takeoff, climb, cruise, etc.), and physics-informed features using aircraft performance models.
+- **Rich Data Integration**: Enriches the core dataset with external sources, including SkyVector for airport infrastructure, the Iowa Environmental Mesonet (IEM) for historical weather (METAR) reports, and regional passenger load factor estimates.
+- **Advanced Feature Engineering**: Creates a wide range of features from raw trajectory data, including flight phase detection (taxi, takeoff, climb, cruise, etc.), atmospheric features (wind, temperature, visibility), and physics-informed features using aircraft performance models.
 - **Flexible Model Training**: Supports XGBoost with multiple hyperparameter optimization modes.
 - **Resource-Optimized Training**: Automatically selects the GPU with the lowest memory usage for training tasks.
 - **Progress Tracking**: Real-time `tqdm` progress bars in all long-running augmentation and training loops for clear ETAs.
@@ -150,7 +150,7 @@ These steps only need to be run once to populate the repository with the require
     ```
 
 6.  **Prepare Weather Data**:
-    Processes raw METAR files into a single flight-keyed dataset, decoding weather phenomenon codes and mapping them to the nearest airport. This produces `processed/processed_metars.parquet` and only needs to be run once.
+    Downloads and processes METAR records from the **Iowa Environmental Mesonet (IEM) ASOS/AWOS archive**. It decodes weather phenomenon codes (rain, snow, fog, etc.) and maps them to the nearest airport, producing `processed/processed_metars.parquet`.
     ```bash
     python run_pipeline.py prepare_metars
     ```
@@ -204,7 +204,7 @@ The training process follows two sequential steps: a testing/feature-selection r
     ```
 
 2.  **Final Model Training**:
-    Retrains the model on 100% of the augmented data (original + synthetic) using the features and preprocessors established in the previous step. Produces the final submission parquets and generates publication-ready plots and tables automatically.
+    Retrains the model on 100% of the augmented data (original + synthetic) using the features and preprocessors established in the previous step. Produces the final submission parquets and generates publication-ready plots and tables for the research paper automatically.
     ```bash
     python run_pipeline.py train_final
 
@@ -227,15 +227,15 @@ python run_pipeline.py train_baselines
 ```
 ### Step 4.6 (Optional): Contribution Ablation Study
 
-Addresses the reviewer requirement for isolated validation of each claimed contribution. Trains one XGBoost model per condition (same hyperparameters, same 80/20 split, same preprocessing) and reports the ΔMAE when each contribution is removed:
+Addresses the requirement for isolated validation of each claimed contribution. Trains one XGBoost model per condition (same hyperparameters, same 80/20 split, same preprocessing) and reports the ΔMAE when each contribution is removed. The results map to the **C1–C4** notation in the paper:
 
 | Condition | Contribution tested |
 |---|---|
 | Full model | Reference (all features) |
-| No METAR features | C1  meteorological weather data |
-| No load-factor features | C2  OD-level load factor & payload estimation |
-| Static MTOW mass | C3  dynamic per-segment mass tracking |
-| Raw (uncorrected) timestamps | C4  takeoff/landing timestamp correction |
+| No METAR features | **C1**: Meteorological data (wind, temp, visibility) |
+| No load-factor features | **C2**: OD-level payload estimation |
+| Static MTOW mass | **C3**: Dynamic per-segment mass tracking |
+| Raw (uncorrected) timestamps | **C4**: Runway-corrected gate-to-gate timing |
 
 Results are saved to `processed/ablation_contributions_results.csv`.
 

@@ -13,6 +13,22 @@ def profile_dataframe(name, df, f):
     """Helper function to write a detailed profile of a dataframe to the report file."""
     f.write(f"\n" + '='*50 + f"\nProfiling: {name}\n" + '='*50 + "\n")
     f.write(f"Shape: {df.shape}\n")
+
+    # Specific profiling for flight segments (fuel datasets)
+    if 'start' in df.columns and 'end' in df.columns:
+        df_temp = df.copy()
+        df_temp['duration'] = (df_temp['end'] - df_temp['start']).dt.total_seconds() / 60.0
+        f.write("\n--- Segment Duration Benchmarks (minutes) ---\n")
+        f.write(f"  - Average: {df_temp['duration'].mean():.2f}\n")
+        f.write(f"  - Median:  {df_temp['duration'].median():.2f}\n")
+        f.write(f"  - Min:     {df_temp['duration'].min():.2f}\n")
+        f.write(f"  - Max:     {df_temp['duration'].max():.2f}\n")
+        
+        if 'fuel_kg' in df.columns:
+            f.write("\n--- Fuel Consumption Benchmarks (kg) ---\n")
+            f.write(f"  - Average: {df['fuel_kg'].mean():.2f}\n")
+            f.write(f"  - Median:  {df['fuel_kg'].median():.2f}\n")
+
     f.write("\n--- Column Data Dictionary ---\n")
     
     # Get a small sample for value examples, handling small dataframes
@@ -93,7 +109,10 @@ def profile_data():
         file_paths = {
             "flightlist_train": os.path.join(base_data_path, 'flightlist_train.parquet'),
             "flightlist_rank": os.path.join(base_data_path, 'flightlist_rank.parquet'),
+            "flightlist_final": os.path.join(base_data_path, 'flightlist_final.parquet'),
             "fuel_train": os.path.join(base_data_path, 'fuel_train.parquet'),
+            "fuel_rank": os.path.join(base_data_path, 'fuel_rank.parquet'),
+            "fuel_final": os.path.join(base_data_path, 'fuel_final.parquet'),
             "apt": os.path.join(base_data_path, 'apt.parquet'),
             "acPerfOpenAP": os.path.join(config.RAW_DATA_DIR, 'acPerfOpenAP.csv'),
             "fuel_rank_submission.parquet" :os.path.join(base_data_path, 'fuel_rank_submission.parquet')

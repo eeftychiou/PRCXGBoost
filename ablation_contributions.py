@@ -64,7 +64,15 @@ FLIGHTLIST_COR_PATH = os.path.join(config.PROCESSED_DATA_DIR,
 FUEL_PATH           = config.FUEL_TRAIN
 FEATURED_TRAIN_PATH = os.path.join(config.PROCESSED_DATA_DIR, 'featured_data_train.parquet')
 FEATURED_RANK_PATH  = os.path.join(config.PROCESSED_DATA_DIR, 'featured_data_rank.parquet')
+FEATURED_FINAL_PATH = os.path.join(config.PROCESSED_DATA_DIR, 'featured_data_final.parquet')
 SYNTHETIC_PATH      = config.SYNTHETIC_WIDEBODY_PATH
+
+# Ground-truth evaluation datasets (available after competition reveal)
+FUEL_RANK_GT_PATH   = os.path.join(config.BASE_DATASETS_DIR, 'fuel_rank.parquet')
+FUEL_FINAL_GT_PATH  = os.path.join(config.BASE_DATASETS_DIR, 'fuel_final.parquet')
+AUGMENTED_RANK_CSV_PATH  = config.AUGMENTED_RANK_CSV
+AUGMENTED_FINAL_CSV_PATH = config.AUGMENTED_FINAL_TEST_CSV
+SELECTED_FEATURES_PATH   = config.SELECTED_FEATURES_PATH
 
 OUTPUT_CSV = os.path.join(config.PROCESSED_DATA_DIR, 'ablation_contributions_results.csv')
 
@@ -143,7 +151,7 @@ def collect_metrics(condition_name, y_true, y_pred, is_wb):
 
 
 def preprocess(X_train_df, X_val_df, feature_cols):
-    """Fit on train; transform train and val. Returns scaled numpy arrays."""
+    """Fit on train; transform train and val. Returns scaled numpy arrays and transformers."""
     X_tr = X_train_df[feature_cols].copy()
     X_vl = X_val_df[feature_cols].copy()
 
@@ -156,6 +164,7 @@ def preprocess(X_train_df, X_val_df, feature_cols):
     num_cols = [c for c in feature_cols if pd.api.types.is_numeric_dtype(X_tr[c])]
     cat_cols = [c for c in feature_cols if c not in num_cols]
 
+    num_imp = cat_imp = enc = None
     if num_cols:
         num_imp = SimpleImputer(strategy='mean')
         X_tr[num_cols] = num_imp.fit_transform(X_tr[num_cols])
@@ -171,7 +180,85 @@ def preprocess(X_train_df, X_val_df, feature_cols):
     scaler = StandardScaler()
     X_tr_s = scaler.fit_transform(X_tr)
     X_vl_s = scaler.transform(X_vl)
-    return X_tr_s, X_vl_s, feature_cols
+
+    out_cols = list(X_tr.columns)  # preserve original column order (matches scaler fit)
+    transformers = {
+        'num_imputer':        num_imp,
+        'cat_imputer':        cat_imp,
+        'cat_encoder':        enc,
+        'scaler':             scaler,
+        'numerical_features': num_cols,
+        'categorical_features': cat_cols,
+        'nan_cols':           nan_cols,
+        'out_cols':           out_cols,
+    }
+    return X_tr_s, X_vl_s, feature_cols, transformers
+
+
+def apply_transformers_to_eval(X_df, transformers):
+    """Apply fitted preprocessing transformers to a new evaluation dataset."""
+    out_cols = transformers['out_cols']
+    num_cols = transformers['numerical_features']
+    cat_cols = transformers['categorical_features']
+    num_imp  = transformers['num_imputer']
+    cat_imp  = transformers['cat_imputer']
+    cat_enc  = transformers['cat_encoder']
+    scaler   = transformers['scaler']
+
+    X = X_df.reindex(columns=out_cols, fill_value=np.nan).copy()
+    if num_cols and num_imp is not None:
+        X[num_cols] = num_imp.transform(X[num_cols])
+    if cat_cols and cat_imp is not None:
+        X[cat_cols] = cat_imp.transform(X[cat_cols])
+        X[cat_cols] = cat_enc.transform(X[cat_cols])
+    return scaler.transform(X)
+
+
+def load_eval_dataset(feat_parquet_path, fuel_gt_path, aug_csv_path=None):
+    """Load rank or final eval dataset with ground-truth fuel consumption."""
+    feat    = pd.read_parquet(feat_parquet_path)
+    fuel_gt = pd.read_parquet(fuel_gt_path)
+    data    = feat.merge(fuel_gt[['flight_id', 'idx', 'fuel_kg']],
+                         on=['flight_id', 'idx'], how='inner', suffixes=('', '_gt'))
+    if 'fuel_kg_gt' in data.columns:
+        data['fuel_kg'] = data['fuel_kg_gt']
+        data = data.drop(columns=['fuel_kg_gt'])
+
+    if aug_csv_path and os.path.exists(aug_csv_path):
+        df_aug  = pd.read_csv(aug_csv_path, low_memory=False)
+        aug_key = 'interval_idx' if 'interval_idx' in df_aug.columns else 'idx'
+        df_aug  = df_aug.rename(columns={aug_key: 'idx'})
+        new_cols = ['flight_id', 'idx'] + [
+            c for c in df_aug.columns
+            if c not in ('flight_id', 'idx') and c not in data.columns
+        ]
+        data = data.merge(df_aug[new_cols], on=['flight_id', 'idx'], how='left')
+
+    if 'alt_avg_ft' not in data.columns:
+        data['alt_avg_ft'] = (data.get('alt_start_ft', 0) + data.get('alt_end_ft', 0)) / 2
+    if 'altitude_change_rate' not in data.columns:
+        data['altitude_change_rate'] = (data.get('alt_change_ft', 0)
+                                        / (data.get('interval_duration_sec', 60) + 1e-6))
+    if 'end_hour' not in data.columns:
+        if 'end' in data.columns:
+            data['end_hour'] = (pd.to_datetime(data['end'], errors='coerce')
+                                .dt.hour.fillna(-1).astype(int))
+        else:
+            data['end_hour'] = -1
+    if 'interval_elapsed_from_flight_start' not in data.columns:
+        data['interval_elapsed_from_flight_start'] = 0
+
+    if 'static_mass_kg' not in data.columns and 'aircraft_type' in data.columns:
+        default_mtow = float(np.median([v['mtow_kg'] for v in AIRCRAFT_DATA.values()]))
+        data['static_mass_kg'] = data['aircraft_type'].map(
+            {k: v['mtow_kg'] for k, v in AIRCRAFT_DATA.items()}
+        ).fillna(default_mtow)
+
+    y  = data['fuel_kg'].values.astype(np.float32)
+    at = data.get('aircraft_type', pd.Series(['unknown'] * len(data)))
+    log.info(f"  Eval dataset: {len(data):,} segments  "
+             f"({at.isin(WIDEBODY_AIRCRAFT).sum():,} widebody)")
+    return data, y, at
 
 
 def train_and_eval(X_tr_s, X_vl_s, y_train, y_val, is_wb_val, condition_name, gpu_id):
@@ -191,7 +278,7 @@ def train_and_eval(X_tr_s, X_vl_s, y_train, y_val, is_wb_val, condition_name, gp
         if r['split'] == 'Overall':
             log.info(f"  {condition_name:<35s}  MAE={r['mae']:.1f} kg  "
                      f"RMSE={r['rmse']:.1f} kg  MAPE={r['mape']:.2f}%  R²={r['r2']:.4f}")
-    return rows
+    return rows, model
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
@@ -307,6 +394,27 @@ def run(gpu_id=None):
             - df_raw['correction_sec'].fillna(0)
         )
         df_raw = df_raw.drop(columns=['correction_sec'])
+    elif 'start' in df_raw.columns:
+        # Fallback: compute raw elapsed directly from fl_raw takeoff + interval start time.
+        # This gives (start - raw_takeoff), equivalent to undoing the timestamp correction.
+        try:
+            raw_tko = (fl_raw[['flight_id', 'takeoff']]
+                       .drop_duplicates('flight_id')
+                       .copy())
+            raw_tko['_raw_tko'] = pd.to_datetime(
+                raw_tko['takeoff'], errors='coerce', utc=True)
+            raw_tko = raw_tko[['flight_id', '_raw_tko']]
+            df_raw = df_raw.merge(raw_tko, on='flight_id', how='left')
+            start_dt = pd.to_datetime(df_raw['start'], errors='coerce', utc=True)
+            df_raw['interval_elapsed_raw'] = (
+                (start_dt - df_raw['_raw_tko']).dt.total_seconds().fillna(0)
+            )
+            df_raw = df_raw.drop(columns=['_raw_tko'], errors='ignore')
+            ts_correction_available = True
+            log.info("  C4 fallback: raw elapsed computed from fl_raw takeoff + interval start "
+                     "(corrected_flightlist_train.parquet not available)")
+        except Exception as _exc:
+            log.warning(f"  C4 fallback failed: {_exc}")
 
     # ── C3: pre-compute static MTOW mass per row ──────────────────────────────
     default_mtow = np.median([v['mtow_kg'] for v in AIRCRAFT_DATA.values()])
@@ -331,6 +439,7 @@ def run(gpu_id=None):
     log.info(f"  Usable intervals: {len(df_all):,}  |  Total features: {len(full_feature_cols)}")
 
     # ── 2. Append cached synthetic widebody data (same as production) ─────────
+    n_real_rows = len(df_all)
     if os.path.exists(SYNTHETIC_PATH):
         df_syn = pd.read_parquet(SYNTHETIC_PATH)
         syn_cols_use = [c for c in full_feature_cols + [target_col] if c in df_syn.columns]
@@ -350,136 +459,244 @@ def run(gpu_id=None):
     else:
         log.warning("  Synthetic widebody cache not found — using real data only.")
 
-    # ── 3. 80/20 split (real data only for val evaluation) ───────────────────
-    log.info("\n[2] Splitting data (80/20, random_state=42) …")
-    n_real = (df_all['flight_id'] != -1).sum()  # synthetic have flight_id=-1
+    # ── 3. Prepare training arrays ─────────────────────────────────────────────
+    log.info("\n[2] Preparing training arrays …")
 
-    all_idx = np.arange(len(df_all))
-    train_idx, val_idx = train_test_split(all_idx, test_size=0.2, random_state=42, shuffle=True)
+    X_df      = df_all[full_feature_cols].reset_index(drop=True)
+    y_arr     = df_all[target_col].values.astype(np.float32)
+    X_df_real = X_df.iloc[:n_real_rows].reset_index(drop=True)
+    y_real    = y_arr[:n_real_rows]
 
-    # Validation = real rows only from val_idx
-    val_is_real = df_all['flight_id'].iloc[val_idx].values != -1
-    val_idx_real = val_idx[val_is_real]
+    log.info(f"  Total rows (real + synthetic): {len(X_df):,}  |  Real-only: {n_real_rows:,}")
 
-    at_val = df_all['aircraft_type'].iloc[val_idx_real].values
-    is_wb_val = np.isin(at_val, WIDEBODY_AIRCRAFT)
-    y_val = df_all[target_col].iloc[val_idx_real].values.astype(np.float32)
-
-    log.info(f"  Train (incl. synthetic): {len(train_idx):,}  "
-             f"| Real-only val: {len(val_idx_real):,}  "
-             f"(widebody segments: {is_wb_val.sum():,})")
-
-    X_df = df_all[full_feature_cols].reset_index(drop=True)
-    y_arr = df_all[target_col].values.astype(np.float32)
-
-    X_train_df  = X_df.iloc[train_idx]
-    X_val_df    = X_df.iloc[val_idx_real]
-    y_train     = y_arr[train_idx]
+    # ── Load SFS features ─────────────────────────────────────────────────────
+    sfs_feature_cols = full_feature_cols  # fallback: use all if no SFS file
+    if os.path.exists(SELECTED_FEATURES_PATH):
+        try:
+            with open(SELECTED_FEATURES_PATH) as f:
+                sfs_data = json.load(f)
+            sfs_selected = (sfs_data['selected_features']
+                            if isinstance(sfs_data, dict) else sfs_data)
+            sfs_set = set(sfs_selected)
+            sfs_feature_cols = [c for c in full_feature_cols
+                                 if c in sfs_set or c == 'aircraft_type']
+            # Force starting_mass_kg in — critical for C3 ablation and production parity
+            if ('starting_mass_kg' in full_feature_cols
+                    and 'starting_mass_kg' not in sfs_feature_cols):
+                sfs_feature_cols = sfs_feature_cols + ['starting_mass_kg']
+                log.info("  Forced 'starting_mass_kg' into feature set "
+                         "(not in SFS selection but required for C3 and production parity)")
+            log.info(f"  SFS filter: {len(sfs_feature_cols)} features retained "
+                     f"(from {SELECTED_FEATURES_PATH})")
+        except Exception as e:
+            log.warning(f"  Could not load SFS features: {e}. Using all features.")
+    else:
+        log.info(f"  {SELECTED_FEATURES_PATH} not found — using all features as base")
 
     # ── 4. Define ablation conditions ─────────────────────────────────────────
-    # Each condition is a (label, feature_cols, X_train_df_variant, X_val_df_variant)
-    # We rebuild variants by column-masking + optional value substitution.
+    # Each condition: (label, feature_cols, X_train_df_variant, y_train_variant, eval_modifier)
+    # eval_modifier: optional fn(ev_data) → ev_data applied before transformers at eval time.
 
-    lf_present  = [c for c in LOAD_FACTOR_FEATURES if c in full_feature_cols]
-    met_present = [c for c in full_feature_cols if c.startswith('dep_') or c.startswith('arr_')]
+    lf_present  = [c for c in LOAD_FACTOR_FEATURES if c in sfs_feature_cols]
+    met_in_data = [c for c in full_feature_cols if c.startswith('dep_') or c.startswith('arr_')]
+    met_in_sfs  = [c for c in sfs_feature_cols if c.startswith('dep_') or c.startswith('arr_')]
+    met_addable = [c for c in met_in_data if c not in sfs_feature_cols]
 
     conditions = []
 
-    # ── A: Full model ─────────────────────────────────────────────────────────
-    conditions.append(('Full model (all contributions)', full_feature_cols,
-                       X_train_df.copy(), X_val_df.copy()))
+    # ── 1: Base — SFS features + synthetic widebody augmentation ──────────────
+    X_base = X_df[sfs_feature_cols].reset_index(drop=True)
+    conditions.append((
+        'Base (SFS + Synthetic)',
+        sfs_feature_cols,
+        X_base.copy(),
+        y_arr,
+        None,
+    ))
 
-    # ── B: No METAR (C1) ─────────────────────────────────────────────────────
-    if met_present:
-        fc_no_metar = [c for c in full_feature_cols if c not in met_present]
-        conditions.append(('No METAR features (–C1)', fc_no_metar,
-                           X_train_df.copy(), X_val_df.copy()))
-        log.info(f"  C1: removing {len(met_present)} METAR columns")
+    # ── 2: No synthetic — SFS features, real training data only ───────────────
+    X_real_sfs = X_df_real[sfs_feature_cols].reset_index(drop=True)
+    conditions.append((
+        'No Synthetic (SFS only)',
+        sfs_feature_cols,
+        X_real_sfs.copy(),
+        y_real,
+        None,
+    ))
+
+    # ── 3: + METAR (+C1) ──────────────────────────────────────────────────────
+    if met_addable:
+        sfs_plus_metar = sfs_feature_cols + met_addable
+        X_metar = X_df[sfs_plus_metar].reset_index(drop=True)
+        conditions.append((
+            'SFS + Synthetic + METAR (+C1)',
+            sfs_plus_metar,
+            X_metar.copy(),
+            y_arr,
+            None,
+        ))
+        log.info(f"  C1: adding {len(met_addable)} METAR columns to SFS base")
+    elif met_in_sfs:
+        # METAR already selected by SFS — show leave-one-out removal instead
+        fc_no_metar = [c for c in sfs_feature_cols if c not in met_in_sfs]
+        X_no_metar  = X_df[fc_no_metar].reset_index(drop=True)
+        conditions.append((
+            'SFS + Synthetic – METAR (–C1)',
+            fc_no_metar,
+            X_no_metar.copy(),
+            y_arr,
+            None,
+        ))
+        log.info(f"  C1: METAR already in SFS base — showing removal of "
+                 f"{len(met_in_sfs)} METAR cols instead")
     else:
-        log.warning("  C1 (METAR): no dep_*/arr_* columns found in featured parquet — "
+        log.warning("  C1 (METAR): no dep_*/arr_* columns found in featured data — "
                     "ensure prepare_metars + prepare_data have been run.  Skipping C1 ablation.")
 
-    # ── C: No load factor (C2) ────────────────────────────────────────────────
+    # ── 4: – Load factor (–C2) ────────────────────────────────────────────────
     if lf_present:
-        fc_no_lf = [c for c in full_feature_cols if c not in lf_present]
-        conditions.append(('No load-factor features (–C2)', fc_no_lf,
-                           X_train_df.copy(), X_val_df.copy()))
-        log.info(f"  C2: removing {len(lf_present)} load-factor columns")
+        fc_no_lf = [c for c in sfs_feature_cols if c not in lf_present]
+        X_no_lf  = X_df[fc_no_lf].reset_index(drop=True)
+        conditions.append((
+            'SFS + Synthetic – Load Factor (–C2)',
+            fc_no_lf,
+            X_no_lf.copy(),
+            y_arr,
+            None,
+        ))
+        log.info(f"  C2: removing {len(lf_present)} load-factor columns from SFS base")
     else:
-        log.warning("  C2 (load factor): none of the load-factor columns found in data. "
+        log.warning("  C2 (load factor): none of the load-factor columns found in SFS set. "
                     "Skipping C2 ablation.")
 
-    # ── D: Static mass / no dynamic tracking (C3) ─────────────────────────────
-    if 'starting_mass_kg' in full_feature_cols and 'static_mass_kg' in df_all.columns:
-        X_train_static = X_train_df.copy()
-        X_val_static   = X_val_df.copy()
-        X_train_static['starting_mass_kg'] = (
-            df_all['static_mass_kg'].iloc[train_idx].values)
-        X_val_static['starting_mass_kg'] = (
-            df_all['static_mass_kg'].iloc[val_idx_real].values)
-        conditions.append(('Static MTOW mass (–C3 dynamic tracking)',
-                           full_feature_cols,
-                           X_train_static, X_val_static))
-        log.info("  C3: starting_mass_kg replaced with MTOW per aircraft type")
+    # ── 5: Static estimated takeoff mass (–C3) ───────────────────────────────
+    # Replace dynamic per-segment starting_mass_kg (OpenAP) with the static
+    # estimated_takeoff_mass already in the featured parquet, which is derived
+    # from load-factor estimates and doesn't change within a flight.
+    if ('starting_mass_kg' in sfs_feature_cols
+            and 'estimated_takeoff_mass' in df_all.columns):
+        X_static = X_base.copy()
+        X_static['starting_mass_kg'] = df_all['estimated_takeoff_mass'].values
+        conditions.append((
+            'SFS + Synthetic + Static Est. TOW (–C3)',
+            sfs_feature_cols,
+            X_static,
+            y_arr,
+            lambda ev: ev.assign(
+                starting_mass_kg=ev['estimated_takeoff_mass']
+            ) if 'estimated_takeoff_mass' in ev.columns else ev,
+        ))
+        log.info("  C3: starting_mass_kg replaced with estimated_takeoff_mass (train + eval)")
+    elif 'starting_mass_kg' in sfs_feature_cols and 'static_mass_kg' in df_all.columns:
+        # Fallback to AIRCRAFT_DATA MTOW lookup if estimated_takeoff_mass absent
+        X_static = X_base.copy()
+        X_static['starting_mass_kg'] = df_all['static_mass_kg'].values
+        conditions.append((
+            'SFS + Synthetic + Static MTOW (–C3)',
+            sfs_feature_cols,
+            X_static,
+            y_arr,
+            lambda ev: ev.assign(starting_mass_kg=ev['static_mass_kg'])
+                       if 'static_mass_kg' in ev.columns else ev,
+        ))
+        log.info("  C3: starting_mass_kg replaced with per-type MTOW (train + eval)")
     else:
-        log.warning("  C3 (dynamic mass): 'starting_mass_kg' not in features.  Skipping.")
+        log.warning("  C3 (dynamic mass): 'starting_mass_kg' not in SFS features or "
+                    "neither 'estimated_takeoff_mass' nor 'static_mass_kg' available. Skipping.")
 
-    # ── E: No timestamp correction (C4) ───────────────────────────────────────
+    # ── 6: Raw timestamps (–C4) ───────────────────────────────────────────────
     if ts_correction_available and 'interval_elapsed_raw' in df_all.columns:
-        X_train_rawts = X_train_df.copy()
-        X_val_rawts   = X_val_df.copy()
-        X_train_rawts['interval_elapsed_from_flight_start'] = (
-            df_all['interval_elapsed_raw'].iloc[train_idx].values)
-        X_val_rawts['interval_elapsed_from_flight_start'] = (
-            df_all['interval_elapsed_raw'].iloc[val_idx_real].values)
-        conditions.append(('Raw timestamps, no correction (–C4)',
-                           full_feature_cols,
-                           X_train_rawts, X_val_rawts))
-        log.info("  C4: interval_elapsed_from_flight_start reverted to raw-flightlist timestamps")
+        X_rawts = X_base.copy()
+        X_rawts['interval_elapsed_from_flight_start'] = (
+            df_all['interval_elapsed_raw'].values)
+        conditions.append((
+            'SFS + Synthetic – Timestamp Correction (–C4)',
+            sfs_feature_cols,
+            X_rawts,
+            y_arr,
+            None,
+        ))
+        log.info("  C4: interval_elapsed_from_flight_start reverted to raw timestamps (train only)")
     else:
         log.warning("  C4 (timestamp correction): corrected flightlist or 'interval_elapsed_raw' "
                     "not available. Skipping.")
 
-    # ── 5. Train & evaluate all conditions ────────────────────────────────────
-    log.info(f"\n[3] Running {len(conditions)} ablation condition(s)…")
-    all_rows = []
-    for label, feat_cols, X_tr_variant, X_vl_variant in conditions:
-        log.info(f"\n{'─'*60}")
-        log.info(f"  Condition: {label}")
-        log.info(f"  Features:  {len(feat_cols)}")
-        X_tr_s, X_vl_s, used_cols = preprocess(X_tr_variant, X_vl_variant, feat_cols)
-        rows = train_and_eval(X_tr_s, X_vl_s, y_train, y_val, is_wb_val, label, gpu_id)
-        all_rows.extend(rows)
+    # ── 5. Load rank & final eval datasets once (shared across conditions) ────
+    log.info("\n[3b] Loading rank and final evaluation datasets …")
+    _eval_configs = [
+        ('Rank',  FEATURED_RANK_PATH,  FUEL_RANK_GT_PATH,  AUGMENTED_RANK_CSV_PATH),
+        ('Final', FEATURED_FINAL_PATH, FUEL_FINAL_GT_PATH, AUGMENTED_FINAL_CSV_PATH),
+    ]
+    eval_datasets = []  # list of (ds_name, data_df, y_eval, at_eval)
+    for ds_name, feat_path, fuel_path, aug_path in _eval_configs:
+        if os.path.exists(feat_path) and os.path.exists(fuel_path):
+            ev_data, y_ev, at_ev = load_eval_dataset(feat_path, fuel_path, aug_path)
+            eval_datasets.append((ds_name, ev_data, y_ev, at_ev))
+        else:
+            log.warning(f"  Skipping {ds_name} eval: required files not found")
 
-    # ── 6. Print summary ──────────────────────────────────────────────────────
+    # ── 6. Train & evaluate all conditions ────────────────────────────────────
+    log.info(f"\n[4] Running {len(conditions)} ablation condition(s)…")
+    all_rows = []
+    _sep = '─' * 60
+    for label, feat_cols, X_tr_variant, y_tr_arr, eval_modifier in conditions:
+        log.info(f"\n{_sep}")
+        log.info(f"  Condition: {label}")
+        log.info(f"  Features:  {len(feat_cols)}  |  Train rows: {len(X_tr_variant):,}")
+        # Pass X_tr_variant twice — val slot unused (no val evaluation)
+        X_tr_s, _, used_cols, transformers = preprocess(X_tr_variant, X_tr_variant, feat_cols)
+        # train_and_eval val arguments are unused; pass dummy zeros
+        dummy_val = np.zeros(1, dtype=np.float32)
+        dummy_wb  = np.zeros(1, dtype=bool)
+        _, model = train_and_eval(X_tr_s, X_tr_s[:1], y_tr_arr, dummy_val, dummy_wb, label, gpu_id)
+
+        # Evaluate on rank and final using the same fitted transformers
+        for ds_name, ev_data, y_ev, at_ev in eval_datasets:
+            is_wb_ev = at_ev.isin(WIDEBODY_AIRCRAFT).values
+            ev_df    = eval_modifier(ev_data) if eval_modifier is not None else ev_data
+            X_ev_s   = apply_transformers_to_eval(ev_df, transformers)
+            y_pred   = np.maximum(np.expm1(model.predict(X_ev_s)), 0)
+            ev_label = f"{label} [{ds_name}]"
+            ev_rows  = collect_metrics(ev_label, y_ev, y_pred, is_wb_ev)
+            for r in ev_rows:
+                if r['split'] == 'Overall':
+                    log.info(f"    [{ds_name}] MAE={r['mae']:.1f}  "
+                             f"RMSE={r['rmse']:.1f}  R²={r['r2']:.4f}")
+            all_rows.extend(ev_rows)
+
+    # ── 7. Print summary ──────────────────────────────────────────────────────
     results_df = pd.DataFrame(all_rows)
 
     log.info("\n" + "=" * 90)
-    log.info(f"{'Condition':<40} {'Split':<14} {'MAE':>10} {'RMSE':>10} "
+    log.info(f"{'Condition':<45} {'Split':<14} {'MAE':>10} {'RMSE':>10} "
              f"{'MAPE':>8} {'R²':>8} {'N':>8}")
     log.info("-" * 90)
     for _, r in results_df.iterrows():
         log.info(
-            f"{r['condition']:<40} {r['split']:<14} {r['mae']:>10.1f} "
+            f"{r['condition']:<45} {r['split']:<14} {r['mae']:>10.1f} "
             f"{r['rmse']:>10.1f} {r['mape']:>7.2f}% {r['r2']:>8.4f} "
             f"{int(r['n_segments']):>8,}"
         )
     log.info("=" * 90)
 
-    # Δ-MAE relative to full model
-    log.info("\nMAE delta vs. Full model (Overall split):")
-    full_mae = results_df[
-        (results_df['condition'].str.startswith('Full')) &
-        (results_df['split'] == 'Overall')
-    ]['mae'].values
-    if len(full_mae) > 0:
-        full_mae = full_mae[0]
+    # Δ-MAE relative to full model per dataset (rank and final only)
+    for ds_suffix in [' [Rank]', ' [Final]']:
+        full_cond = f'Base (SFS + Synthetic){ds_suffix}'
+        full_rows = results_df[
+            (results_df['condition'] == full_cond) &
+            (results_df['split'] == 'Overall')
+        ]
+        if full_rows.empty:
+            continue
+        full_mae = full_rows.iloc[0]['mae']
+        ds_label = ds_suffix.strip(' []') if ds_suffix else 'Validation'
+        log.info(f"\nΔMAE vs. Base model [{ds_label}] (Overall split):")
         for _, r in results_df[results_df['split'] == 'Overall'].iterrows():
-            if not r['condition'].startswith('Full'):
+            if r['condition'].endswith(ds_suffix) and r['condition'] != full_cond:
                 delta = r['mae'] - full_mae
                 pct   = delta / full_mae * 100
                 direction = 'degradation' if delta > 0 else 'improvement'
-                log.info(f"  {r['condition']:<40} ΔMAE={delta:+.1f} kg "
+                log.info(f"  {r['condition']:<45} ΔMAE={delta:+.1f} kg "
                          f"({pct:+.2f}%)  ← {direction}")
 
     # ── 7. Save ───────────────────────────────────────────────────────────────

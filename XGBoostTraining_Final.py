@@ -7,6 +7,7 @@ from sklearn.feature_selection import SequentialFeatureSelector
 from sklearn.model_selection import train_test_split, RandomizedSearchCV
 from xgboost import XGBRegressor
 import warnings
+import joblib
 import logging
 import os
 from datetime import datetime
@@ -441,11 +442,11 @@ def main(gpu_id=0, force_sfs=False, force_synthetic=False, opt_mode='legacy'):
         df_raw = df_raw.merge(_dur_tmp, on=['flight_id', 'interval_idx'], how='left')
     logger.info(f"[+] Total columns: {len(df_raw.columns)}")
 
-    # Assemble feature vector
     base_features = [
         'starting_mass_kg', 'alt_end_ft', 'alt_avg_ft', 'gs_avg_kts', 'vs_avg_fpm',
         'interval_duration_sec', 'altitude_change_rate', 'great_circle_distance',
         'aircraft_type', 'end_hour', 'interval_elapsed_from_flight_start',
+        'openap_fuel_kg',
     ]
 
     extended_features_available = [col for col in available_features[2:] if col not in base_features]
@@ -963,18 +964,7 @@ def main(gpu_id=0, force_sfs=False, force_synthetic=False, opt_mode='legacy'):
     N_RANK_ROWS = 24289
 
     # Retrieve pre-trained transformers
-    import joblib
-    preprocessors_path = os.path.join(RESULTS_DIR, 'test_preprocessors_rank.joblib')
-    preprocessors = joblib.load(preprocessors_path)
-    feature_cols_selected = preprocessors['feature_cols_selected']
-    numerical_features = preprocessors['numerical_features']
-    categorical_features = preprocessors['categorical_features']
-    num_imputer_full = preprocessors['num_imputer_full']
-    cat_imputer_full = preprocessors['cat_imputer_full']
-    cat_encoder_full = preprocessors['cat_encoder_full']
-    scaler_full = preprocessors['scaler_full']
-    selected_mask = preprocessors['selected_mask']
-    selected_features = preprocessors['selected_features']
+    # (Removed to prevent overwriting freshly fitted variables from Phase 6)
 
     # Load submission template
     logger.info("🔍 LOADING FUEL SUBMISSION DATA...")
@@ -1560,7 +1550,7 @@ def main(gpu_id=0, force_sfs=False, force_synthetic=False, opt_mode='legacy'):
         try:
             _rank1_dir = os.path.join(RESULTS_DIR, 'final_xgb_model_rank1')
             _prod_model = joblib.load(os.path.join(_rank1_dir, 'model.joblib'))
-            _prep_from_disk = joblib.load(os.path.join(RESULTS_DIR, 'test_preprocessors_rank.joblib'))
+            _prep_from_disk = joblib.load(os.path.join(_rank1_dir, 'preprocessor.joblib'))
             _prod_all_feats = _prep_from_disk['feature_cols_selected']  # full set (~125)
             # _training_mask (56 features) is already set from Phase 6 — use it directly
             _prod_num_imp   = _prep_from_disk['num_imputer_full']
@@ -2277,13 +2267,11 @@ def main(gpu_id=0, force_sfs=False, force_synthetic=False, opt_mode='legacy'):
         logger.error(f"[-] Failed to generate paper graphics: {e}")
 
 
-def run():
-    gpu_id = 0
-    force_sfs = '--force-sfs' in sys.argv
-    force_synthetic = '--force-synthetic' in sys.argv
+def run(gpu_id=0, force_sfs=False, force_synthetic=False, opt_mode='legacy'):
+    force_sfs = force_sfs or '--force-sfs' in sys.argv
+    force_synthetic = force_synthetic or '--force-synthetic' in sys.argv
     
     # Parse CLI optimization flags
-    opt_mode = 'legacy'
     if '--grid' in sys.argv:
         opt_mode = 'grid'
     elif '--optuna' in sys.argv:
